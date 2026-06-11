@@ -37,6 +37,7 @@ import type {
   SamplingPreferences,
   TranslateMissingLocaleResult,
   AddTranslationsResult,
+  WriteTranslationsResult,
   UpdateTranslationsResult,
   ScaffoldLocaleResult,
   PlaceholderValidationResult,
@@ -195,13 +196,13 @@ export function findLocaleOrThrow(config: I18nConfig, localeRef: string): Locale
 }
 
 /**
- * Shared logic for add_translations and update_translations.
+ * Shared logic for write_translations (supports add, update, and upsert modes).
  */
 export async function applyTranslations(
   config: I18nConfig,
   layer: string,
   translations: Record<string, Record<string, string>>,
-  mode: 'add' | 'update',
+  mode: 'add' | 'update' | 'upsert',
   findLocale: (config: I18nConfig, ref: string) => LocaleDefinition | undefined,
   dryRun = false,
 ): Promise<MutationResult> {
@@ -481,7 +482,7 @@ export function buildFallbackContext(
   keysAndValues: Record<string, string>,
 ): Record<string, unknown> {
   const context: Record<string, unknown> = {
-    instruction: `Translate these keys from ${referenceLocaleCode} to ${targetLocaleCode}, then call add_translations to write them.`,
+    instruction: `Translate these keys from ${referenceLocaleCode} to ${targetLocaleCode}, then call write_translations (mode: 'upsert') to write them.`,
     referenceLocale: referenceLocaleCode,
     targetLocale: targetLocaleCode,
     keysToTranslate: keysAndValues,
@@ -618,7 +619,61 @@ export async function getTranslations(opts: {
 }
 
 /**
+ * Write translation keys to the specified layer with mode control.
+ *
+ * Mode:
+ *   - 'upsert' (default): Adds new keys and updates existing ones. Never skips.
+ *   - 'add': Only creates new keys, skipping existing ones.
+ *   - 'update': Only modifies existing keys, skipping missing ones.
+ */
+export async function writeTranslations(opts: {
+  layer: string
+  translations: Record<string, Record<string, string>>
+  mode?: 'add' | 'update' | 'upsert'
+  dryRun?: boolean
+  projectDir?: string
+}): Promise<WriteTranslationsResult> {
+  const { layer, translations } = opts
+  const dir = opts.projectDir ?? process.cwd()
+  const config = await detectI18nConfig(dir)
+  const mode = opts.mode ?? 'upsert'
+  const isDryRun = opts.dryRun ?? false
+
+  const { applied, skipped, warnings, filesWritten, preview, placeholderValidation } = await applyTranslations(
+    config, layer, translations, mode, findLocaleImpl, isDryRun,
+  )
+
+  if (isDryRun) {
+    const result: WriteTranslationsResult = {
+      dryRun: true,
+      wouldWrite: preview,
+      skipped,
+      summary: {
+        keysWritten: applied.length,
+        keysSkipped: skipped.length,
+        message: 'Call again with dryRun: false to apply these changes.',
+      },
+    }
+    if (skipped.length > 0) { result.skippedKeys = skipped }
+    if (warnings.length > 0) { result.warnings = warnings }
+    if (placeholderValidation) { result.placeholderValidation = placeholderValidation }
+    return result
+  }
+
+  const result: WriteTranslationsResult = {
+    written: applied,
+    skipped,
+    filesWritten,
+  }
+  if (warnings.length > 0) { result.warnings = warnings }
+  if (placeholderValidation) { result.placeholderValidation = placeholderValidation }
+  return result
+}
+
+/**
  * Add new translation keys to the specified layer.
+ *
+ * @deprecated Use writeTranslations with mode: 'add' instead.
  */
 export async function addTranslations(opts: {
   layer: string
@@ -675,6 +730,8 @@ export async function addTranslations(opts: {
 
 /**
  * Update existing translation keys in the specified layer.
+ *
+ * @deprecated Use writeTranslations with mode: 'update' instead.
  */
 export async function updateTranslations(opts: {
   layer: string
@@ -923,8 +980,9 @@ export async function searchTranslations(opts: {
   layer?: string
   locale?: string
   projectDir?: string
-}): Promise<{ matches: SearchMatch[]; totalMatches: number }> {
-  const { query, layer, locale } = opts
+  outputFile?: string
+}): Promise<{ matches: SearchMatch[]; totalMatches: number } | { reportFile: string; summary: { totalMatches: number } }> {
+  const { query, layer, locale, outputFile } = opts
   const dir = opts.projectDir ?? process.cwd()
   const config = await detectI18nConfig(dir)
 
@@ -991,7 +1049,18 @@ export async function searchTranslations(opts: {
     }
   }
 
-  return { matches, totalMatches: matches.length }
+  const output = { matches, totalMatches: matches.length }
+
+  const reportPath = outputFile ?? resolveReportFilePath(config, dir, 'search_translations')
+  if (reportPath) {
+    await writeReportFile(reportPath, output, {
+      tool: 'search_translations',
+      args: { query, searchIn: opts.searchIn, layer, locale },
+    })
+    return { reportFile: reportPath, summary: { totalMatches: matches.length } }
+  }
+
+  return output
 }
 
 /**
@@ -1231,7 +1300,6 @@ export async function translateMissing(opts: {
 
   const samplingSupported = !!opts.samplingFn
   const reportProgress = opts.progressFn ?? (async () => {})
-  let samplingModelLogged = false
 
   /** Check whether a key is missing in a given locale data object */
   function isKeyMissingIn(data: Record<string, unknown>, k: string): boolean {
@@ -1269,13 +1337,20 @@ export async function translateMissing(opts: {
   const results: Record<string, TranslateMissingLocaleResult> = {}
   const fallbackContexts: Record<string, Record<string, unknown>> = {}
 
+  // Pre-read all target locale data for missing key detection
+  const targetDataCache = new Map<string, Record<string, unknown>>()
   for (const target of targets) {
     let targetData: Record<string, unknown> = {}
-
     try {
       targetData = await readLocaleData(config, layer, target)
     } catch {}
+    targetDataCache.set(target.code, targetData)
+  }
 
+  async function translateOneLocale(
+    target: LocaleDefinition,
+    targetData: Record<string, unknown>,
+  ): Promise<{ result: TranslateMissingLocaleResult, fallbackContext?: Record<string, unknown> }> {
     let missingKeys: string[]
     if (opts.keys) {
       missingKeys = opts.keys.filter(k => isKeyMissingIn(targetData, k) && allRefKeys.includes(k))
@@ -1284,8 +1359,7 @@ export async function translateMissing(opts: {
     }
 
     if (missingKeys.length === 0) {
-      results[target.code] = { translated: [], failed: [], samplingUsed: false, reason: 'no-missing-keys' }
-      continue
+      return { result: { translated: [], failed: [], samplingUsed: false, reason: 'no-missing-keys' } }
     }
 
     await reportProgress(`Starting ${target.code}: ${missingKeys.length} missing keys`)
@@ -1300,14 +1374,8 @@ export async function translateMissing(opts: {
     }
 
     if (isDryRun) {
-      results[target.code] = {
-        translated: Object.keys(keysAndValues),
-        failed: [],
-        samplingUsed: samplingSupported,
-        reason: 'dry-run',
-      }
       await reportProgress(`Complete ${target.code} (dry run)`)
-      continue
+      return { result: { translated: Object.keys(keysAndValues), failed: [], samplingUsed: samplingSupported, reason: 'dry-run' } }
     }
 
     if (samplingSupported && opts.samplingFn) {
@@ -1325,7 +1393,7 @@ export async function translateMissing(opts: {
 
         const systemPrompt = buildTranslationSystemPrompt(config.projectConfig, target.language || target.code, config.localeFileFormat)
         const userMessage = buildTranslationUserMessage(
-          refLocale.language || refLocale.code,
+          refLocale!.language || refLocale!.code,
           target.language || target.code,
           batch,
           config.localeFileFormat,
@@ -1345,10 +1413,7 @@ export async function translateMissing(opts: {
             })
 
             samplingModel = samplingResult.model
-            if (!samplingModelLogged) {
-              log.info(`Sampling model: ${samplingResult.model}`)
-              samplingModelLogged = true
-            }
+            log.info(`Sampling model: ${samplingResult.model}`)
 
             const parsed = extractJsonFromResponse(samplingResult.text)
             const batchKeys = new Set(Object.keys(batch))
@@ -1406,29 +1471,36 @@ export async function translateMissing(opts: {
           })
         } catch (error) {
           log.warn(`Failed to write translations for ${target.code}: ${error instanceof Error ? error.message : String(error)}`)
-          results[target.code] = { translated: [], failed: [...Object.keys(keysAndValues)], samplingUsed: true, reason: 'translated-with-sampling', batches: totalBatches, model: samplingModel, writeError: error instanceof Error ? error.message : String(error) }
-          continue
+          return { result: { translated: [], failed: [...Object.keys(keysAndValues)], samplingUsed: true, reason: 'translated-with-sampling', batches: totalBatches, model: samplingModel, writeError: error instanceof Error ? error.message : String(error) } }
         }
       }
 
-      results[target.code] = { translated, failed, samplingUsed: true, reason: 'translated-with-sampling', batches: totalBatches, model: samplingModel, ...(placeholderValidation ? { placeholderValidation } : {}) }
+      await reportProgress(`Complete ${target.code}`)
+      return { result: { translated, failed, samplingUsed: true, reason: 'translated-with-sampling', batches: totalBatches, model: samplingModel, ...(placeholderValidation ? { placeholderValidation } : {}) } }
     } else {
       // Fallback: return context for agent to translate inline
-      fallbackContexts[target.code] = buildFallbackContext(
+      const fallbackContext = buildFallbackContext(
         config.projectConfig,
-        refLocale.language || refLocale.code,
+        refLocale!.language || refLocale!.code,
         target.language || target.code,
         keysAndValues,
       )
-      results[target.code] = {
-        translated: [],
-        failed: Object.keys(keysAndValues),
-        samplingUsed: false,
-        reason: 'sampling-unavailable',
-      }
+      await reportProgress(`Complete ${target.code}`)
+      return { result: { translated: [], failed: Object.keys(keysAndValues), samplingUsed: false, reason: 'sampling-unavailable' }, fallbackContext }
     }
+  }
 
-    await reportProgress(`Complete ${target.code}`)
+  const localeResults = await Promise.all(targets.map(async (target) => {
+    const targetData = targetDataCache.get(target.code) ?? {}
+    return translateOneLocale(target, targetData)
+  }))
+
+  for (const [i, { result, fallbackContext }] of localeResults.entries()) {
+    const localeCode = targets[i].code
+    results[localeCode] = result
+    if (fallbackContext) {
+      fallbackContexts[localeCode] = fallbackContext
+    }
   }
 
   const totalTranslated = Object.values(results).reduce((sum, r) => sum + r.translated.length, 0)
@@ -1451,7 +1523,7 @@ export async function translateMissing(opts: {
     output.fallbackContexts = fallbackContexts
     output.summary = {
       ...(output.summary as Record<string, unknown>),
-      message: 'Sampling not supported by this host. Use the fallbackContexts to translate inline, then call add_translations to write the results.',
+      message: 'Sampling not supported by this host. Use the fallbackContexts to translate inline, then call write_translations (mode: "upsert") to write the results.',
     }
   }
 
@@ -1662,21 +1734,21 @@ export async function translateKey(opts: {
 }
 
 /**
- * Find translation keys that exist in locale files but are not referenced in source code.
+ * Shared helper for findOrphanKeys and removeOrphanKeys.
+ * Resolves the locale, filters layers, validates aliases, and builds the
+ * keysByLayer Map. Returns the resolved context — or throws on invalid input.
+ * The caller handles the empty-report case (totalKeys === 0).
  */
-export async function findOrphanKeysOp(opts: {
-  layer?: string
-  locale?: string
-  scanDirs?: string[]
-  excludeDirs?: string[]
-  projectDir?: string
-  outputFile?: string
-}): Promise<Record<string, unknown>> { // TODO: use specific result type from types.ts
-  const { layer, locale, scanDirs, excludeDirs } = opts
-  const dir = opts.projectDir ?? process.cwd()
-  const config = await detectI18nConfig(dir)
-
-  const localeCode = locale ?? config.defaultLocale
+async function resolveOrphanScanContext(
+  config: I18nConfig,
+  opts: { layer?: string; locale?: string; dir: string; toolName: string },
+): Promise<{
+  layersToCheck: LocaleDir[]
+  keysByLayer: Map<string, { keys: string[]; localeDir: LocaleDir }>
+  totalKeys: number
+  localeCode: string
+}> {
+  const localeCode = opts.locale ?? config.defaultLocale
   const localeDef = findLocaleImpl(config, localeCode)
   if (!localeDef) {
     throw new ToolError(
@@ -1685,20 +1757,20 @@ export async function findOrphanKeysOp(opts: {
     )
   }
 
-  const layersToCheck = layer
-    ? config.localeDirs.filter(d => d.layer === layer)
+  const layersToCheck = opts.layer
+    ? config.localeDirs.filter(d => d.layer === opts.layer)
     : config.localeDirs.filter(d => !d.aliasOf)
 
   if (layersToCheck.length === 0) {
-    if (layer) {
-      findLayerOrThrow(config, layer)
+    if (opts.layer) {
+      findLayerOrThrow(config, opts.layer)
     }
     throw new ToolError('No locale directories found.', 'LAYER_NOT_FOUND')
   }
 
-  if (layer && layersToCheck[0]?.aliasOf) {
+  if (opts.layer && layersToCheck[0]?.aliasOf) {
     throw new ToolError(
-      `Layer "${layer}" is an alias of "${layersToCheck[0].aliasOf}". Use the target layer instead.`,
+      `Layer "${opts.layer}" is an alias of "${layersToCheck[0].aliasOf}". Use the target layer instead.`,
       'LAYER_IS_ALIAS',
     )
   }
@@ -1716,6 +1788,32 @@ export async function findOrphanKeysOp(opts: {
   }
 
   const totalKeys = [...keysByLayer.values()].reduce((sum, v) => sum + v.keys.length, 0)
+
+  return { layersToCheck, keysByLayer, totalKeys, localeCode }
+}
+
+/**
+ * Find translation keys that exist in locale files but are not referenced in source code.
+ */
+export async function findOrphanKeys(opts: {
+  layer?: string
+  locale?: string
+  scanDirs?: string[]
+  excludeDirs?: string[]
+  projectDir?: string
+  outputFile?: string
+}): Promise<Record<string, unknown>> { // TODO: use specific result type from types.ts
+  const { layer, locale, scanDirs, excludeDirs } = opts
+  const dir = opts.projectDir ?? process.cwd()
+  const config = await detectI18nConfig(dir)
+
+  const { layersToCheck, keysByLayer, totalKeys, localeCode } = await resolveOrphanScanContext(config, {
+    layer,
+    locale,
+    dir,
+    toolName: 'find_orphan_keys',
+  })
+
   if (totalKeys === 0) {
     const emptyOutput = { orphanKeys: {} as Record<string, string[]>, summary: { totalKeys: 0, orphanCount: 0, filesScanned: 0, message: 'No translation keys found in locale files.' } }
     const reportPath = opts.outputFile ?? resolveReportFilePath(config, dir, 'find_orphan_keys')
@@ -1800,7 +1898,7 @@ export async function findOrphanKeysOp(opts: {
 /**
  * Scan Vue/TS source files to find where translation keys are referenced.
  */
-export async function scanCodeUsageOp(opts: {
+export async function scanCodeUsage(opts: {
   keys?: string[]
   scanDirs?: string[]
   excludeDirs?: string[]
@@ -1884,7 +1982,7 @@ export async function scanCodeUsageOp(opts: {
 /**
  * Find translation keys not referenced in source code and remove them.
  */
-export async function cleanupUnusedTranslations(opts: {
+export async function removeOrphanKeys(opts: {
   layer?: string
   locale?: string
   scanDirs?: string[]
@@ -1898,52 +1996,19 @@ export async function cleanupUnusedTranslations(opts: {
   const config = await detectI18nConfig(dir)
   const isDryRun = opts.dryRun ?? true
 
-  const localeCode = locale ?? config.defaultLocale
-  const localeDef = findLocaleImpl(config, localeCode)
-  if (!localeDef) {
-    throw new ToolError(
-      `Locale not found: "${localeCode}". Available: ${config.locales.map(l => l.code).join(', ')}`,
-      'LOCALE_NOT_FOUND',
-    )
-  }
+  const { keysByLayer, totalKeys } = await resolveOrphanScanContext(config, {
+    layer,
+    locale,
+    dir,
+    toolName: 'remove_orphan_keys',
+  })
 
-  const layersToCheck = layer
-    ? config.localeDirs.filter(d => d.layer === layer)
-    : config.localeDirs.filter(d => !d.aliasOf)
-
-  if (layersToCheck.length === 0) {
-    if (layer) {
-      findLayerOrThrow(config, layer)
-    }
-    throw new ToolError('No locale directories found.', 'LAYER_NOT_FOUND')
-  }
-
-  if (layer && layersToCheck[0]?.aliasOf) {
-    throw new ToolError(
-      `Layer "${layer}" is an alias of "${layersToCheck[0].aliasOf}". Use the target layer instead.`,
-      'LAYER_IS_ALIAS',
-    )
-  }
-
-  const keysByLayer = new Map<string, { keys: string[]; localeDir: LocaleDir }>()
-  for (const ld of layersToCheck) {
-    let data: Record<string, unknown>
-    try {
-      data = await readLocaleData(config, ld.layer, localeDef)
-    } catch {
-      continue
-    }
-    if (Object.keys(data).length === 0) continue
-    keysByLayer.set(ld.layer, { keys: getLeafKeys(data), localeDir: ld })
-  }
-
-  const totalKeys = [...keysByLayer.values()].reduce((sum, v) => sum + v.keys.length, 0)
   if (totalKeys === 0) {
     const emptyOutput = { orphanKeys: {}, removed: {}, summary: { totalKeys: 0, orphanCount: 0, message: 'No translation keys found.' } }
-    const emptyReportPath = opts.outputFile ?? resolveReportFilePath(config, dir, 'cleanup_unused_translations')
+    const emptyReportPath = opts.outputFile ?? resolveReportFilePath(config, dir, 'remove_orphan_keys')
     if (emptyReportPath) {
       await writeReportFile(emptyReportPath, emptyOutput, {
-        tool: 'cleanup_unused_translations',
+        tool: 'remove_orphan_keys',
         args: { layer, locale, scanDirs, excludeDirs, dryRun: opts.dryRun },
       })
       return { reportFile: emptyReportPath, summary: emptyOutput.summary }
@@ -1980,10 +2045,10 @@ export async function cleanupUnusedTranslations(opts: {
       uncertainKeys: orphanResult.uncertainCount > 0 ? orphanResult.uncertainByLayer : undefined,
       summary: { totalKeys, orphanCount: 0, uncertainCount: orphanResult.uncertainCount, dynamicMatchedCount, ignoredCount, filesScanned: totalFilesScanned, message: messageParts.join(' ') },
     }
-    const zeroReportPath = opts.outputFile ?? resolveReportFilePath(config, dir, 'cleanup_unused_translations')
+    const zeroReportPath = opts.outputFile ?? resolveReportFilePath(config, dir, 'remove_orphan_keys')
     if (zeroReportPath) {
       await writeReportFile(zeroReportPath, zeroOutput, {
-        tool: 'cleanup_unused_translations',
+        tool: 'remove_orphan_keys',
         args: { layer, locale, scanDirs, excludeDirs, dryRun: opts.dryRun },
       })
       return { reportFile: zeroReportPath, summary: zeroOutput.summary }
@@ -2021,10 +2086,10 @@ export async function cleanupUnusedTranslations(opts: {
         suggestedIgnorePattern: w.suggestedIgnorePattern,
       }))
     }
-    const dryRunReportPath = opts.outputFile ?? resolveReportFilePath(config, dir, 'cleanup_unused_translations')
+    const dryRunReportPath = opts.outputFile ?? resolveReportFilePath(config, dir, 'remove_orphan_keys')
     if (dryRunReportPath) {
       await writeReportFile(dryRunReportPath, output, {
-        tool: 'cleanup_unused_translations',
+        tool: 'remove_orphan_keys',
         args: { layer, locale, scanDirs, excludeDirs, dryRun: opts.dryRun },
       })
       return { reportFile: dryRunReportPath, summary: output.summary }
@@ -2072,10 +2137,10 @@ export async function cleanupUnusedTranslations(opts: {
     },
   }
 
-  const removalReportPath = opts.outputFile ?? resolveReportFilePath(config, dir, 'cleanup_unused_translations')
+  const removalReportPath = opts.outputFile ?? resolveReportFilePath(config, dir, 'remove_orphan_keys')
   if (removalReportPath) {
     await writeReportFile(removalReportPath, removalOutput, {
-      tool: 'cleanup_unused_translations',
+      tool: 'remove_orphan_keys',
       args: { layer, locale, scanDirs, excludeDirs, dryRun: opts.dryRun },
     })
     return { reportFile: removalReportPath, summary: removalOutput.summary }

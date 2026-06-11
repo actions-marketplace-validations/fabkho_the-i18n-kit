@@ -4,6 +4,7 @@ export const commands = {
   'detect': () => import('./detect.js').then(m => m.default as CommandDef),
   'list-dirs': () => import('./list-dirs.js').then(m => m.default as CommandDef),
   'get': () => import('./get.js').then(m => m.default as CommandDef),
+  'write': () => import('./write.js').then(m => m.default as CommandDef),
   'add': () => import('./add.js').then(m => m.default as CommandDef),
   'update': () => import('./update.js').then(m => m.default as CommandDef),
   'missing': () => import('./missing.js').then(m => m.default as CommandDef),
@@ -13,8 +14,7 @@ export const commands = {
   'rename': () => import('./rename.js').then(m => m.default as CommandDef),
   'translate': () => import('./translate.js').then(m => m.default as CommandDef),
   'translate-key': () => import('./translate-key.js').then(m => m.default as CommandDef),
-  'orphans': () => import('./orphans.js').then(m => m.default as CommandDef),
   'scan': () => import('./scan.js').then(m => m.default as CommandDef),
-  'cleanup': () => import('./cleanup.js').then(m => m.default as CommandDef),
+  'remove-orphans': () => import('./remove-orphans.js').then(m => m.default as CommandDef),
   'scaffold': () => import('./scaffold.js').then(m => m.default as CommandDef),
 } as const

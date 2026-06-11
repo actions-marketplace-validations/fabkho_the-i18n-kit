@@ -1,11 +1,14 @@
 import { defineCommand } from 'citty'
+import { createSamplingFn } from '../llm/providers.js'
+import type { SamplingFn } from '../core/types.js'
+import type { LlmProvider } from '../llm/providers.js'
 import { translateMissing } from '../core/operations.js'
 import { sharedArgs, outputResult, splitList } from './_shared.js'
 
 export default defineCommand({
   meta: {
     name: 'translate',
-    description: 'Find missing translations and return fallback contexts for translation',
+    description: 'Find missing translations and translate them via LLM. Requires --provider and --model for auto-translation.',
   },
   args: {
     ...sharedArgs,
@@ -30,6 +33,19 @@ export default defineCommand({
       type: 'string',
       description: 'Batch size (default: 50)',
     },
+    provider: {
+      type: 'string' as const,
+      description: 'LLM provider: "openai" or "anthropic". Without this, only returns fallback contexts.',
+      valueHint: 'openai|anthropic',
+    },
+    model: {
+      type: 'string' as const,
+      description: 'Model name (required when --provider is set)',
+    },
+    apiKey: {
+      type: 'string' as const,
+      description: 'API key (falls back to OPENAI_API_KEY / ANTHROPIC_API_KEY env)',
+    },
     dryRun: {
       type: 'boolean',
       description: 'Preview what would be translated',
@@ -46,6 +62,19 @@ export default defineCommand({
       }
       batchSize = num
     }
+
+    let samplingFn: SamplingFn | undefined
+    if (args.provider) {
+      if (!args.model) {
+        throw new Error('--model is required when --provider is set')
+      }
+      samplingFn = await createSamplingFn({
+        provider: args.provider as LlmProvider,
+        model: args.model,
+        apiKey: args.apiKey,
+      })
+    }
+
     const result = await translateMissing({
       layer: args.layer,
       referenceLocale: args.ref,
@@ -54,7 +83,7 @@ export default defineCommand({
       batchSize,
       dryRun: args.dryRun,
       projectDir: args.projectDir,
-      // No samplingFn — CLI always returns fallback contexts
+      samplingFn,
     })
     outputResult(result, args)
   },
