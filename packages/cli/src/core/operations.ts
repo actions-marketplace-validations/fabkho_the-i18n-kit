@@ -1424,21 +1424,23 @@ export async function translateMissing(opts: {
               }
             }
             break
-          } catch (error) {
+          } catch (_error) {
             if (attempt === 0) {
-              log.warn(`Sampling failed for batch ${batchNum} in ${target.code}, retrying: ${error instanceof Error ? error.message : String(error)}`)
+              log.warn(`Sampling failed for batch ${batchNum} in ${target.code}, retrying (attempt 2)`)
             } else {
-              log.warn(`Sampling retry failed for batch ${batchNum} in ${target.code}: ${error instanceof Error ? error.message : String(error)}`)
+              log.warn(`Sampling retry failed for batch ${batchNum} in ${target.code}`)
             }
           }
         }
 
-        if (batchTranslations !== null) {
-          for (const [key, value] of Object.entries(batchTranslations)) {
-            if (typeof value === 'string') {
-              allTranslations[key] = value
-              translated.push(key)
-            }
+        const validTranslations = batchTranslations !== null
+          ? Object.entries(batchTranslations).filter(([, v]) => typeof v === 'string')
+          : []
+
+        if (validTranslations.length > 0) {
+          for (const [key, value] of validTranslations) {
+            allTranslations[key] = value
+            translated.push(key)
           }
         } else {
           failed.push(...Object.keys(batch))
@@ -2007,6 +2009,7 @@ export async function removeOrphanKeys(opts: {
     const emptyOutput = { orphanKeys: {}, removed: {}, summary: { totalKeys: 0, orphanCount: 0, message: 'No translation keys found.' } }
     const emptyReportPath = opts.outputFile ?? resolveReportFilePath(config, dir, 'remove_orphan_keys')
     if (emptyReportPath) {
+      validateReportPath(dir, emptyReportPath)
       await writeReportFile(emptyReportPath, emptyOutput, {
         tool: 'remove_orphan_keys',
         args: { layer, locale, scanDirs, excludeDirs, dryRun: opts.dryRun },
@@ -2047,6 +2050,7 @@ export async function removeOrphanKeys(opts: {
     }
     const zeroReportPath = opts.outputFile ?? resolveReportFilePath(config, dir, 'remove_orphan_keys')
     if (zeroReportPath) {
+      validateReportPath(dir, zeroReportPath)
       await writeReportFile(zeroReportPath, zeroOutput, {
         tool: 'remove_orphan_keys',
         args: { layer, locale, scanDirs, excludeDirs, dryRun: opts.dryRun },
@@ -2088,6 +2092,7 @@ export async function removeOrphanKeys(opts: {
     }
     const dryRunReportPath = opts.outputFile ?? resolveReportFilePath(config, dir, 'remove_orphan_keys')
     if (dryRunReportPath) {
+      validateReportPath(dir, dryRunReportPath)
       await writeReportFile(dryRunReportPath, output, {
         tool: 'remove_orphan_keys',
         args: { layer, locale, scanDirs, excludeDirs, dryRun: opts.dryRun },
@@ -2139,6 +2144,7 @@ export async function removeOrphanKeys(opts: {
 
   const removalReportPath = opts.outputFile ?? resolveReportFilePath(config, dir, 'remove_orphan_keys')
   if (removalReportPath) {
+    validateReportPath(dir, removalReportPath)
     await writeReportFile(removalReportPath, removalOutput, {
       tool: 'remove_orphan_keys',
       args: { layer, locale, scanDirs, excludeDirs, dryRun: opts.dryRun },
