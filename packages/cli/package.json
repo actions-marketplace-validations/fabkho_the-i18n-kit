@@ -20,8 +20,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fabkho/the-i18n-kit.git",
-    "directory": "packages/cli"
+    "url": "git+https://github.com/fabkho/the-i18n-kit.git"
   },
   "bin": {
     "the-i18n-cli": "./dist/bin.js"
