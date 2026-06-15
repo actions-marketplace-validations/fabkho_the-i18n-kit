@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/fabkho/the-i18n-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/fabkho/the-i18n-kit/actions/workflows/ci.yml)
 [![License](https://img.shields.io/npm/l/the-i18n-mcp?style=flat&colorA=18181b&colorB=4fc08d)](https://github.com/fabkho/the-i18n-kit/blob/main/LICENSE)
+[![Glama score](https://glama.ai/mcp/servers/fabkho/the-i18n-kit/badges/score.svg)](https://glama.ai/mcp/servers/fabkho/the-i18n-kit)
 
 **Translation file management for developers and AI agents.** Find missing keys, remove dead ones, rename across all locales at once — from the terminal or from inside your AI coding session.
 
@@ -46,6 +47,8 @@ Agent changes wording for an existing key
 ```
 
 ---
+
+[![the-i18n-kit MCP server](https://glama.ai/mcp/servers/fabkho/the-i18n-kit/badges/card.svg)](https://glama.ai/mcp/servers/fabkho/the-i18n-kit)
 
 ## Packages
 
