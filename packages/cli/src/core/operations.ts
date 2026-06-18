@@ -74,7 +74,7 @@ export function resolveSamplingPreferences(projectConfig?: ProjectConfig): Sampl
  * Scales linearly (40 tokens per key + 512 base) capped at 16384.
  */
 export function computeMaxTokens(batchKeyCount: number): number {
-  return Math.min(16384, batchKeyCount * 40 + 512)
+  return Math.min(16384, batchKeyCount * 100 + 1024)
 }
 
 /**
