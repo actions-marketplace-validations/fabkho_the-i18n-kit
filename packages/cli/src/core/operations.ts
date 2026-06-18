@@ -1454,10 +1454,11 @@ export async function translateMissing(opts: {
             }
             break
           } catch (_error) {
+            const errMsg = _error instanceof Error ? _error.message : String(_error)
             if (attempt === 0) {
-              log.warn(`Sampling failed for batch ${batchNum} in ${target.code}, retrying (attempt 2)`)
+              log.warn(`Sampling failed for batch ${batchNum} in ${target.code}: ${errMsg}. Retrying (attempt 2)`)
             } else {
-              log.warn(`Sampling retry failed for batch ${batchNum} in ${target.code}`)
+              log.warn(`Sampling retry failed for batch ${batchNum} in ${target.code}: ${errMsg}`)
             }
           }
         }
