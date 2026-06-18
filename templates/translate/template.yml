@@ -90,7 +90,7 @@ spec:
         exit 1
       fi
 
-      args="--provider $[[ inputs.provider ]] --model $[[ inputs.model ]] --layer $[[ inputs.layer ]] --batch-size $[[ inputs.batch_size ]] --json"
+      args="--provider $[[ inputs.provider ]] --model $[[ inputs.model ]] --layer $[[ inputs.layer ]] --batch-size $[[ inputs.batch_size ]]"
 
       [ -n "$[[ inputs.locales ]]" ]       && args="$args --targets $[[ inputs.locales ]]"
       [ -n "$[[ inputs.source_locale ]]" ] && args="$args --ref $[[ inputs.source_locale ]]"
