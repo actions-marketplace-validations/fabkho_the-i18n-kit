@@ -41,12 +41,6 @@
   stage: lint
   allow_failure: true
   variables:
-    # Required
-    I18N_PROVIDER: ""         # openai | anthropic | google
-    I18N_MODEL: ""            # e.g. gpt-4o, gemini-2.0-flash
-    I18N_API_KEY: ""          # API key for the chosen provider
-    I18N_LAYER: ""            # e.g. common, dashboard
-
     # Optional — translation
     I18N_LOCALES: ""          # comma-separated target locales (default: all except source)
     I18N_SOURCE_LOCALE: ""    # reference locale (default: from .i18n-mcp.json)
@@ -117,8 +111,8 @@
         exit 0
       fi
 
-      # Check if there are changes
-      if git diff --quiet && git diff --cached --quiet; then
+      # Check if there are locale file changes
+      if git diff --quiet -- i18n/locales/ && git diff --cached --quiet -- i18n/locales/; then
         echo "No translation changes to commit."
         exit 0
       fi
