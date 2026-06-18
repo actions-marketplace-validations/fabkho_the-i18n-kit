@@ -69,7 +69,6 @@
         echo "Installing peer dependencies: $I18N_INSTALL_PEER_DEPS"
         npm install $I18N_INSTALL_PEER_DEPS
       fi
-    - the-i18n-cli detect
 
   script:
     - |
@@ -172,7 +171,6 @@
       if [ -n "$I18N_INSTALL_PEER_DEPS" ]; then
         npm install $I18N_INSTALL_PEER_DEPS
       fi
-    - the-i18n-cli detect
 
   script:
     - |
