@@ -38,9 +38,6 @@ spec:
     batch_size:
       default: '50'
       description: 'Keys per LLM call'
-    concurrency:
-      default: ''
-      description: 'Parallel LLM calls (default: provider default)'
     dry_run:
       default: 'false'
       description: 'Preview without writing files'
@@ -98,7 +95,6 @@ spec:
       [ -n "$[[ inputs.locales ]]" ]       && args="$args --targets $[[ inputs.locales ]]"
       [ -n "$[[ inputs.source_locale ]]" ] && args="$args --ref $[[ inputs.source_locale ]]"
       [ -n "$[[ inputs.keys ]]" ]          && args="$args --keys $[[ inputs.keys ]]"
-      [ -n "$[[ inputs.concurrency ]]" ]   && args="$args --concurrency $[[ inputs.concurrency ]]"
       [ "$[[ inputs.dry_run ]]" = "true" ] && args="$args --dry-run"
 
       mkdir -p .i18n-reports

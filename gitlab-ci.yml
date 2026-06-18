@@ -46,7 +46,6 @@
     I18N_SOURCE_LOCALE: ""    # reference locale (default: from .i18n-mcp.json)
     I18N_KEYS: ""             # comma-separated keys (default: all missing)
     I18N_BATCH_SIZE: "50"     # keys per LLM call
-    I18N_CONCURRENCY: ""      # parallel LLM calls (default: provider default)
     I18N_DRY_RUN: "false"     # preview without writing files
 
     # Optional — dependencies
@@ -95,7 +94,6 @@
       [ -n "$I18N_LOCALES" ]       && args="$args --targets $I18N_LOCALES"
       [ -n "$I18N_SOURCE_LOCALE" ] && args="$args --ref $I18N_SOURCE_LOCALE"
       [ -n "$I18N_KEYS" ]          && args="$args --keys $I18N_KEYS"
-      [ -n "$I18N_CONCURRENCY" ]   && args="$args --concurrency $I18N_CONCURRENCY"
       [ "$I18N_DRY_RUN" = "true" ] && args="$args --dry-run"
 
       mkdir -p .i18n-reports
