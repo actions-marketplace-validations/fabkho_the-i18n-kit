@@ -472,7 +472,7 @@ export function extractJsonFromResponse(responseText: string): Record<string, un
     }
   }
 
-  throw new Error('No valid JSON object found in response')
+  throw new Error(`No valid JSON object found in response. Preview: ${trimmed.substring(0, 200)}`)
 }
 
 export function buildFallbackContext(
