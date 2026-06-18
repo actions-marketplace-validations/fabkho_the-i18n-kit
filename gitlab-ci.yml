@@ -80,8 +80,13 @@
           ;;
       esac
 
-      if [ -z "$I18N_PROVIDER" ] || [ -z "$I18N_MODEL" ] || [ -z "$I18N_API_KEY" ] || [ -z "$I18N_LAYER" ]; then
-        echo "ERROR: I18N_PROVIDER, I18N_MODEL, I18N_API_KEY, and I18N_LAYER are required"
+      MISSING=""
+      [ -z "$I18N_PROVIDER" ] && MISSING="$MISSING I18N_PROVIDER"
+      [ -z "$I18N_MODEL" ]    && MISSING="$MISSING I18N_MODEL"
+      [ -z "$I18N_API_KEY" ]  && MISSING="$MISSING I18N_API_KEY"
+      [ -z "$I18N_LAYER" ]    && MISSING="$MISSING I18N_LAYER"
+      if [ -n "$MISSING" ]; then
+        echo "ERROR: missing required variables:$MISSING"
         exit 1
       fi
 

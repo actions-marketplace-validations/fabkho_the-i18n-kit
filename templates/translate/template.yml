@@ -83,8 +83,13 @@ spec:
           ;;
       esac
 
-      if [ -z "$[[ inputs.provider ]]" ] || [ -z "$[[ inputs.model ]]" ] || [ -z "$[[ inputs.api_key ]]" ] || [ -z "$[[ inputs.layer ]]" ]; then
-        echo "ERROR: provider, model, api_key, and layer inputs are required"
+      MISSING=""
+      [ -z "$[[ inputs.provider ]]" ] && MISSING="$MISSING provider"
+      [ -z "$[[ inputs.model ]]" ]    && MISSING="$MISSING model"
+      [ -z "$[[ inputs.api_key ]]" ]  && MISSING="$MISSING api_key"
+      [ -z "$[[ inputs.layer ]]" ]    && MISSING="$MISSING layer"
+      if [ -n "$MISSING" ]; then
+        echo "ERROR: missing required inputs:$MISSING"
         exit 1
       fi
 
