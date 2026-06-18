@@ -93,22 +93,16 @@ spec:
         exit 1
       fi
 
-      args=(
-        --provider "$[[ inputs.provider ]]"
-        --model "$[[ inputs.model ]]"
-        --layer "$[[ inputs.layer ]]"
-        --batch-size "$[[ inputs.batch_size ]]"
-        --json
-      )
+      args="--provider $[[ inputs.provider ]] --model $[[ inputs.model ]] --layer $[[ inputs.layer ]] --batch-size $[[ inputs.batch_size ]] --json"
 
-      [ -n "$[[ inputs.locales ]]" ]       && args+=(--targets "$[[ inputs.locales ]]")
-      [ -n "$[[ inputs.source_locale ]]" ] && args+=(--ref "$[[ inputs.source_locale ]]")
-      [ -n "$[[ inputs.keys ]]" ]          && args+=(--keys "$[[ inputs.keys ]]")
-      [ -n "$[[ inputs.concurrency ]]" ]   && args+=(--concurrency "$[[ inputs.concurrency ]]")
-      [ "$[[ inputs.dry_run ]]" = "true" ] && args+=(--dry-run)
+      [ -n "$[[ inputs.locales ]]" ]       && args="$args --targets $[[ inputs.locales ]]"
+      [ -n "$[[ inputs.source_locale ]]" ] && args="$args --ref $[[ inputs.source_locale ]]"
+      [ -n "$[[ inputs.keys ]]" ]          && args="$args --keys $[[ inputs.keys ]]"
+      [ -n "$[[ inputs.concurrency ]]" ]   && args="$args --concurrency $[[ inputs.concurrency ]]"
+      [ "$[[ inputs.dry_run ]]" = "true" ] && args="$args --dry-run"
 
       mkdir -p .i18n-reports
-      the-i18n-cli translate "${args[@]}" | tee .i18n-reports/translate-output.json
+      the-i18n-cli translate $args | tee .i18n-reports/translate-output.json
 
   after_script:
     - |

@@ -90,22 +90,16 @@
         exit 1
       fi
 
-      args=(
-        --provider "$I18N_PROVIDER"
-        --model "$I18N_MODEL"
-        --layer "$I18N_LAYER"
-        --batch-size "$I18N_BATCH_SIZE"
-        --json
-      )
+      args="--provider $I18N_PROVIDER --model $I18N_MODEL --layer $I18N_LAYER --batch-size $I18N_BATCH_SIZE --json"
 
-      [ -n "$I18N_LOCALES" ]       && args+=(--targets "$I18N_LOCALES")
-      [ -n "$I18N_SOURCE_LOCALE" ] && args+=(--ref "$I18N_SOURCE_LOCALE")
-      [ -n "$I18N_KEYS" ]          && args+=(--keys "$I18N_KEYS")
-      [ -n "$I18N_CONCURRENCY" ]   && args+=(--concurrency "$I18N_CONCURRENCY")
-      [ "$I18N_DRY_RUN" = "true" ] && args+=(--dry-run)
+      [ -n "$I18N_LOCALES" ]       && args="$args --targets $I18N_LOCALES"
+      [ -n "$I18N_SOURCE_LOCALE" ] && args="$args --ref $I18N_SOURCE_LOCALE"
+      [ -n "$I18N_KEYS" ]          && args="$args --keys $I18N_KEYS"
+      [ -n "$I18N_CONCURRENCY" ]   && args="$args --concurrency $I18N_CONCURRENCY"
+      [ "$I18N_DRY_RUN" = "true" ] && args="$args --dry-run"
 
       mkdir -p .i18n-reports
-      the-i18n-cli translate "${args[@]}" | tee .i18n-reports/translate-output.json
+      the-i18n-cli translate $args | tee .i18n-reports/translate-output.json
 
   after_script:
     - |
