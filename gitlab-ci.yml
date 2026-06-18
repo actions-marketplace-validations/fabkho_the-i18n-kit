@@ -52,6 +52,7 @@
     I18N_INSTALL_PEER_DEPS: ""  # space-separated npm packages to install (e.g. "@google/genai")
 
     # Optional — PR behaviour
+    I18N_LOCALE_PATHS: "i18n/locales/"  # space-separated globs for locale directories (e.g. "i18n/locales/ app-*/i18n/locales/")
     I18N_COMMIT_MESSAGE: ""   # custom commit message
     I18N_MR_COMMENT: "true"   # post a summary comment on the MR
 
@@ -108,8 +109,8 @@
         exit 0
       fi
 
-      # Check if there are locale file changes
-      if git diff --quiet -- i18n/locales/ && git diff --cached --quiet -- i18n/locales/; then
+      # Check if there are locale file changes (configurable path pattern)
+      if git diff --quiet -- $I18N_LOCALE_PATHS && git diff --cached --quiet -- $I18N_LOCALE_PATHS; then
         echo "No translation changes to commit."
         exit 0
       fi
@@ -125,11 +126,11 @@
       fi
 
       PUSH_URL="https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
-      git add i18n/locales/
+      git add $I18N_LOCALE_PATHS
       git commit -m "$COMMIT_MSG"
       git push "$PUSH_URL" "HEAD:${CI_COMMIT_REF_NAME}"
 
-      CHANGED_FILES=$(git diff --name-only "HEAD~1" i18n/locales/ | wc -l | tr -d ' ')
+      CHANGED_FILES=$(git diff --name-only "HEAD~1" $I18N_LOCALE_PATHS | wc -l | tr -d ' ')
 
       # Post MR comment (only in MR context)
       if [ "$I18N_MR_COMMENT" = "true" ] && [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
