@@ -96,8 +96,8 @@
       fi
 
       # Configure git
-      git config user.name "gitlab-ci[bot]"
-      git config user.email "gitlab-ci[bot]@gitlab.com"
+      git config user.name "${GITLAB_USER_NAME:-i18n CI}"
+      git config user.email "${GITLAB_USER_EMAIL:-ci@the-i18n-kit.dev}"
 
       # Create branch and commit
       BRANCH="i18n/translate-missing-$(date +%s)"

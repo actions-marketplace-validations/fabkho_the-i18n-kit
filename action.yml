@@ -179,8 +179,8 @@ runs:
           TITLE="$PR_TITLE"
         fi
 
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git config user.name "${{ github.actor }}"
+        git config user.email "${{ github.actor }}@users.noreply.github.com"
 
         # Check if there are changes
         if git diff --quiet && git diff --cached --quiet; then
