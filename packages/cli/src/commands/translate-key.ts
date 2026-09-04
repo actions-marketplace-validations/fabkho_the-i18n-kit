@@ -1,8 +1,5 @@
-import { createCommand, splitList } from './_shared.js'
+import { createCommand, splitList, providerArgs, resolveProviderTranslateFn } from './_shared.js'
 import { translateKey } from '../core/operations.js'
-import { createSamplingFn } from '../llm/providers.js'
-import type { SamplingFn } from '../core/types.js'
-import type { LlmProvider } from '../llm/providers.js'
 
 export default createCommand({
   name: 'translate-key',
@@ -14,28 +11,16 @@ export default createCommand({
     sourceValue: { type: 'string', description: 'Optional source value to write before translating' },
     targets: { type: 'string', description: 'Comma-separated target locales, or "all"/omitted for all except source' },
     overwrite: { type: 'boolean', description: 'Overwrite existing target translations (default true)', default: true },
-    dryRun: { type: 'boolean', description: 'Preview without writing or sampling', default: false },
+    dryRun: { type: 'boolean', description: 'Preview without writing or translating', default: false },
     includePreview: { type: 'boolean', description: 'Include translated values in output', default: false },
-    provider: { type: 'string' as const, description: 'LLM provider: "openai", "anthropic", or "google". Without this, only returns fallback context.', valueHint: 'openai|anthropic|google' },
-    model: { type: 'string' as const, description: 'Model name (required when --provider is set)' },
-    apiKey: { type: 'string' as const, description: 'API key (falls back to OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY env).' },
+    ...providerArgs,
   },
   async run(args) {
     const targetLocales = args.targets === 'all' ? 'all' : splitList(args.targets)
 
-    let samplingFn: SamplingFn | undefined
-    if (args.provider) {
-      if (!args.model) {
-        throw new Error('--model is required when --provider is set')
-      }
-      samplingFn = await createSamplingFn({
-        provider: args.provider as LlmProvider,
-        model: args.model,
-        apiKey: args.apiKey,
-      })
-    }
+    const translateFn = await resolveProviderTranslateFn(args)
 
-    return translateKey({
+    const result = await translateKey({
       layer: args.layer,
       key: args.key,
       sourceLocale: args.sourceLocale,
@@ -45,7 +30,15 @@ export default createCommand({
       dryRun: args.dryRun,
       includePreview: args.includePreview,
       projectDir: args.projectDir,
-      samplingFn,
+      translateFn,
     })
+
+    // CLI-owned guidance: agent mode here just means no provider was given
+    if (result.mode === 'agent' && result.skipped.some(s => s.reason === 'no-provider')) {
+      result.message = 'No provider configured — nothing was translated. Pass --provider and --model '
+        + '(API key via --apiKey or the OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY env vars) '
+        + 'to translate automatically.'
+    }
+    return result
   },
 })

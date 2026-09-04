@@ -1,8 +1,7 @@
-import { writeFile, readFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { FileIOError } from '../utils/errors'
 import { toErrorMessage } from '../utils/errors'
-import { sortKeysDeep } from './key-operations'
+import { sortKeysDeep, orderKeysPreserving } from './key-operations'
 import { clearPhpFileCacheEntry } from './php-reader'
 import { atomicWrite } from './atomic-write'
 
@@ -96,7 +95,9 @@ function escapePhpString(str: string, quote: string): string {
   if (quote === '\'') {
     return str.replace(/\\/g, '\\\\').replace(/'/g, '\\\'')
   }
-  return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  // Double-quoted PHP strings interpolate variables: an unescaped `$` (or
+  // `{$…}`) in a value would become live PHP interpolation on read-back.
+  return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$')
 }
 
 function renderArray(
@@ -134,20 +135,6 @@ function renderArray(
   }
 }
 
-export async function detectPhpFileStyle(filePath: string): Promise<{ quoteStyle: 'single' | 'double'; indent: string }> {
-  if (!existsSync(filePath)) {
-    return { quoteStyle: 'double', indent: '    ' }
-  }
-
-  try {
-    const content = await readFile(filePath, 'utf-8')
-    return detectPhpStyle(content)
-  }
-  catch {
-    return { quoteStyle: 'double', indent: '    ' }
-  }
-}
-
 export function detectPhpStyle(content: string): { quoteStyle: 'single' | 'double'; indent: string } {
   const keyPattern = /(['"])([^'"]+)\1\s*=>/g
   let singleCount = 0
@@ -159,12 +146,17 @@ export function detectPhpStyle(content: string): { quoteStyle: 'single' | 'doubl
   }
   const quoteStyle: 'single' | 'double' = singleCount > doubleCount ? 'single' : 'double'
 
-  const indentMatch = content.match(/^([ \t]+)['"]/m)
-  const indent = indentMatch ? indentMatch[1] : '    '
+  const indent = content.match(/^([ \t]+)['"]/m)?.[1] ?? '    '
 
   return { quoteStyle, indent }
 }
 
+/**
+ * Read, mutate, and write back a single PHP locale file while preserving its
+ * existing style (quote style + indentation, via detectPhpStyle) and key
+ * order: existing keys keep their on-disk order; keys added by the mutation
+ * are inserted in sorted position among their siblings.
+ */
 export async function mutatePhpLocaleFile(
   filePath: string,
   mutate: (data: Record<string, unknown>) => void,
@@ -173,6 +165,9 @@ export async function mutatePhpLocaleFile(
   const data = await readPhpLocaleFile(filePath)
   const rawContent = await readFile(filePath, 'utf-8')
   const { quoteStyle, indent } = detectPhpStyle(rawContent)
+  // Snapshot the on-disk key order before the mutation runs.
+  const reference = structuredClone(data)
   mutate(data)
-  await writePhpLocaleFile(filePath, data, { quoteStyle, indent })
+  const ordered = orderKeysPreserving(data, reference)
+  await writePhpLocaleFile(filePath, ordered, { quoteStyle, indent, sortKeys: false })
 }

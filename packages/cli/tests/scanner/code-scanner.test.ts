@@ -1,10 +1,107 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import { mkdir, writeFile, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { extractKeys, scanSourceFiles, toRelativePath, buildDynamicKeyRegexes, buildIgnorePatternRegexes } from '../../src/scanner/code-scanner.js'
+import { extractKeys, findOrphanKeysForConfig, scanSourceFiles, toRelativePath, buildDynamicKeyRegexes, buildIgnorePatternRegexes } from '../../src/scanner/code-scanner.js'
+
+/**
+ * tinyglobby returns whatever order its parallel walk happened to finish in.
+ * A handful of files in a temp directory is not enough to make that vary, so
+ * the order is forced here instead of hoped for — otherwise the determinism
+ * test below passes with or without the fix it exists to guard.
+ */
+const globControl = vi.hoisted(() => ({ reverse: false }))
+
+vi.mock('tinyglobby', async (importActual) => {
+  const actual = await importActual<typeof import('tinyglobby')>()
+  return {
+    ...actual,
+    glob: async (...args: Parameters<typeof actual.glob>) => {
+      const paths = await actual.glob(...args)
+      return globControl.reverse ? [...paths].reverse() : paths
+    },
+  }
+})
 
 const tmpDir = join(dirname(fileURLToPath(import.meta.url)), '../../.tmp-test/scanner')
+
+describe('single-segment keys used via a bare t()', () => {
+  /**
+   * `requiresDotForCallee` skips `t('word')` because a bare `t` is ambiguous —
+   * `emit('save')` is not a translation. That guard is right, but dropping the
+   * match entirely means a flat catalogue's keys look unreferenced, and
+   * remove-orphans offers a live key for deletion (#298).
+   *
+   * The argument is kept as a bare candidate instead: candidates only protect
+   * a key when one of that exact name exists, so an `emit('save')` in a project
+   * with no `save` key still protects nothing.
+   */
+  it('keeps the argument as a bare candidate rather than dropping it', () => {
+    const { usages, bareStringCandidates } = extractKeys(`const x = t('save')`, 'a.ts')
+
+    expect(usages).toHaveLength(0)
+    expect(bareStringCandidates.has('save')).toBe(true)
+  })
+
+  it('still records a dotted key as a confirmed usage', () => {
+    const { usages } = extractKeys(`const x = t('nested.used')`, 'a.ts')
+
+    expect(usages.map(u => u.key)).toEqual(['nested.used'])
+  })
+
+  // $t and this.$t are unambiguous, so they were never subject to the guard.
+  it('leaves the unambiguous callees recording usages', () => {
+    const { usages } = extractKeys(`{{ $t('save') }}`, 'a.vue')
+
+    expect(usages.map(u => u.key)).toEqual(['save'])
+  })
+})
+
+describe('scan order determinism (#327)', () => {
+  /**
+   * tinyglobby walks directories in parallel and promises no stable order, and
+   * nothing downstream re-sorted, so scan order became output order: the same
+   * binary disagreed with itself between runs on an unchanged tree — 3,194
+   * differing lines on a 7-app monorepo, identical once sorted.
+   *
+   * That made diffing output before and after a change unusable, which is the
+   * technique that catches what unit tests miss.
+   */
+  const determinismDir = join(tmpDir, 'determinism')
+
+  beforeAll(async () => {
+    await mkdir(join(determinismDir, 'b'), { recursive: true })
+    await mkdir(join(determinismDir, 'a'), { recursive: true })
+    await writeFile(join(determinismDir, 'b', 'two.vue'), `<template>{{ $t('b.two') }}</template>`)
+    await writeFile(join(determinismDir, 'a', 'one.vue'), `<template>{{ $t('a.one') }}</template>`)
+    await writeFile(join(determinismDir, 'a', 'three.vue'), `<template>{{ $t('a.three') }}</template>`)
+  })
+
+  afterAll(() => {
+    globControl.reverse = false
+  })
+
+  it('produces the same result whichever order the walk returns files in', async () => {
+    globControl.reverse = false
+    const forwards = await scanSourceFiles(determinismDir)
+
+    globControl.reverse = true
+    const backwards = await scanSourceFiles(determinismDir)
+
+    // Whole records, not just keys: a usage carries its file and line, and the
+    // bug was in the order files were read. Comparing keys alone would pass
+    // while file and line drifted underneath.
+    expect(backwards.usages).toEqual(forwards.usages)
+  })
+
+  it('orders usages by file path rather than by walk order', async () => {
+    globControl.reverse = true
+
+    const { usages } = await scanSourceFiles(determinismDir)
+
+    expect(usages.map(u => u.key)).toEqual(['a.one', 'a.three', 'b.two'])
+  })
+})
 
 describe('extractKeys', () => {
   function extract(content: string, filePath = 'test.vue') {
@@ -213,6 +310,59 @@ describe('extractKeys', () => {
     })
   })
 
+  // #284: same-file `const NAME = 'dotted.path'` declarations resolve
+  // `${NAME}` interpolations into exact keys.
+  describe('const-table resolution (#284)', () => {
+    it('never substitutes let bindings — reassignment would stale the literal', () => {
+      const content = [
+        `let base = 'menu.items'`,
+        `base = computePrefix()`,
+        'const label = t(`${base}.title`)',
+      ].join('\n')
+      const { usages, dynamicKeys } = extractKeys(content, 'test.ts')
+      expect(usages.map(u => u.key)).not.toContain('menu.items.title')
+      expect(dynamicKeys.map(d => d.expression)).toContain('`${base}.title`')
+    })
+
+    // Exact const resolution moved to the syntax frontend (#402), which
+    // follows the real binding. The pattern path reports the template as
+    // written — a wildcard is the conservative reading for a fallback.
+    it.each([
+      ['single-quoted const prefix', "const i18nBase = 'pages.organization.settings.tabs.aiAgent.widgetConfigurator'", 'const title = t(`${i18nBase}.title`)', '`${i18nBase}.title`'],
+      ['double-quoted const value', 'const base = "components.integrations"', 'const label = $t(`${base}.title`)', '`${base}.title`'],
+      ['partially resolvable template', "const base = 'components.integrations'", 'const label = t(`${base}.${type}.label`)', '`${base}.${type}.label`'],
+    ])('reports a template as written, protection stays wide: %s', (_case, decl, call, expected) => {
+      const { usages, dynamicKeys } = extract([decl, call].join('\n'))
+      expect(usages).toHaveLength(0)
+      expect(dynamicKeys).toHaveLength(1)
+      expect(dynamicKeys[0]).toMatchObject({ expression: expected, line: 2 })
+    })
+
+    it('leaves member expressions and unknown identifiers dynamic', () => {
+      const { dynamicKeys } = extract('t(`${lockType.translationPath}.select`)')
+      expect(dynamicKeys).toHaveLength(1)
+      expect(dynamicKeys[0].expression).toBe('`${lockType.translationPath}.select`')
+    })
+
+    it('ignores non-key-shaped const values (no dot)', () => {
+      const content = [
+        "const word = 'title'",
+        'const label = t(`pages.${word}`)',
+      ].join('\n')
+      const { dynamicKeys } = extract(content)
+      expect(dynamicKeys).toHaveLength(1)
+      expect(dynamicKeys[0].expression).toBe('`pages.${word}`')
+    })
+
+    it('drops names shadowed with different values (ambiguous)', () => {
+      const { usages, dynamicKeys } = extract(
+        "const base = 'pages.settings'\nconst base = 'pages.account'\nconst label = t(`${base}.title`)",
+      )
+      expect(usages).toHaveLength(0)
+      expect(dynamicKeys.map(d => d.expression)).toEqual(['`${base}.title`'])
+    })
+  })
+
   describe('mixed static and dynamic on same line', () => {
     it('extracts both static and dynamic from a complex expression', () => {
       const content = `t('pages.dashboard.widgets.label') + \` / \${t(\`common.datetime.terms.\${options.frequency}\`)}\``
@@ -346,7 +496,10 @@ describe('buildDynamicKeyRegexes', () => {
     const regexes = buildDynamicKeyRegexes([makeDynamic('`settings.${section}.${field}`')])
     expect(regexes).toHaveLength(1)
     expect(regexes[0].test('settings.general.name')).toBe(true)
-    expect(regexes[0].test('settings.general.name.extra')).toBe(false)
+    // #284: interpolated variables can hold dotted paths, so extra segments
+    // now match too — accepted over-suppression.
+    expect(regexes[0].test('settings.general.name.extra')).toBe(true)
+    expect(regexes[0].test('other.general.name')).toBe(false)
   })
 
   it('escapes special regex characters in static parts', () => {
@@ -374,8 +527,52 @@ describe('buildDynamicKeyRegexes', () => {
     const regexes = buildDynamicKeyRegexes([makeDynamic('`common.${type}`')])
     expect(regexes).toHaveLength(1)
     expect(regexes[0].test('common.button')).toBe(true)
-    expect(regexes[0].test('common.button.extra')).toBe(false)
+    // #284: `${type}` may hold a dotted path — accepted over-suppression.
+    expect(regexes[0].test('common.button.extra')).toBe(true)
     expect(regexes[0].test('prefix.common.button')).toBe(false)
+  })
+
+  // #284: `${_}` widens to `.+?` because a variable can hold a dotted path.
+  describe('variable-prefix widening (#284)', () => {
+    it('widens a leading interpolation to any number of segments', () => {
+      const regexes = buildDynamicKeyRegexes([makeDynamic('`${lockType.translationPath}.select`')])
+      expect(regexes).toHaveLength(1)
+      expect(regexes[0].test('components.integrations.pinCodeLock.select')).toBe(true)
+      expect(regexes[0].test('single.select')).toBe(true)
+      expect(regexes[0].test('components.integrations.pinCodeLock.label')).toBe(false)
+    })
+
+    it('widens interior interpolations too', () => {
+      const regexes = buildDynamicKeyRegexes([makeDynamic('`api.${path}.title`')])
+      expect(regexes[0].test('api.deep.nested.path.title')).toBe(true)
+      expect(regexes[0].test('other.deep.title')).toBe(false)
+    })
+
+    it('keeps literal bounds: trailing interpolation still requires the prefix', () => {
+      const regexes = buildDynamicKeyRegexes([makeDynamic('`a.b.${x}`')])
+      expect(regexes[0].test('a.b.c')).toBe(true)
+      expect(regexes[0].test('a.b.c.d')).toBe(true)
+      expect(regexes[0].test('z.b.c')).toBe(false)
+      expect(regexes[0].test('other.a.b.c')).toBe(false)
+    })
+
+    it('does not widen dotless templates into match-everything', () => {
+      const regexes = buildDynamicKeyRegexes([makeDynamic('`${x}`'), makeDynamic('`btn${x}`')])
+      expect(regexes[0].test('word')).toBe(true)
+      expect(regexes[0].test('some.dotted.key')).toBe(false)
+      expect(regexes[1].test('btnPrimary')).toBe(true)
+      expect(regexes[1].test('btn.dotted.key')).toBe(false)
+    })
+
+    it('does not widen when no literal part anchors a key fragment', () => {
+      // `${a}.${b}` / `v${major}.${minor}` would compile to match-(nearly-)
+      // everything under widening; they keep single-segment slots.
+      const regexes = buildDynamicKeyRegexes([makeDynamic('`${a}.${b}`'), makeDynamic('`v${major}.${minor}`')])
+      expect(regexes[0].test('two.segments')).toBe(true)
+      expect(regexes[0].test('deep.nested.key')).toBe(false)
+      expect(regexes[1].test('v1.2')).toBe(true)
+      expect(regexes[1].test('vouchers.list.title')).toBe(false)
+    })
   })
 
   it('handles empty array', () => {
@@ -605,8 +802,9 @@ describe('scanSourceFiles', () => {
     expect(result.filesScanned).toBe(0)
   })
 
-  it('extracts bare dynamic candidates from template literals with dots and interpolation', async () => {
+  it('extracts bare dynamic candidates from key-shaped template literals with dots and interpolation', async () => {
     await writeFile(join(tmpDir, 'Component.vue'), [
+      // #275 — URLs are not key-shaped (`:`, `/`) and are no longer candidates.
       'const url = `https://api.example.com/${id}`',
       'const label = `common.plans.trialPeriod.${interval}`',
       'const title = `pages.${section}.items.${id}.label`',
@@ -614,8 +812,7 @@ describe('scanSourceFiles', () => {
     ].join('\n'))
 
     const result = await scanSourceFiles(tmpDir)
-    expect(result.bareDynamicCandidates.size).toBe(3)
-    expect(result.bareDynamicCandidates.has('`https://api.example.com/${_}`')).toBe(true)
+    expect(result.bareDynamicCandidates.size).toBe(2)
     expect(result.bareDynamicCandidates.has('`common.plans.trialPeriod.${_}`')).toBe(true)
     expect(result.bareDynamicCandidates.has('`pages.${_}.items.${_}.label`')).toBe(true)
   })
@@ -640,6 +837,219 @@ describe('scanSourceFiles', () => {
     const result = await scanSourceFiles(tmpDir)
     expect(result.bareDynamicCandidates.size).toBe(1)
     expect(result.bareDynamicCandidates.has('`prefix.${_}.suffix`')).toBe(true)
+  })
+
+  // #262 — prefix-shaped literals count as dynamic candidates in any context,
+  // not only directly left of a concat operator.
+  it('collects prefix-shaped string literals passed as plain arguments', async () => {
+    await writeFile(join(tmpDir, 'columns.ts'), [
+      `columns.push(translatedColumn('status', 'api.orders.status.'))`,
+    ].join('\n'))
+
+    const result = await scanSourceFiles(tmpDir)
+    expect(result.bareDynamicCandidates.has('`api.orders.status.${_}`')).toBe(true)
+    const regexes = buildDynamicKeyRegexes([...result.bareDynamicCandidates].map(e => ({ expression: e })))
+    expect(regexes.some(re => re.test('api.orders.status.open'))).toBe(true)
+  })
+
+  // #275 — a stray backtick must not turn the span to the next backtick into a
+  // mega-expression; only candidates with i18n-key shape survive.
+  describe('bare-template mega-capture rejection (#275)', () => {
+    it('rejects stray-backtick spans and prose templates, keeps key-shaped ones', async () => {
+      await writeFile(join(tmpDir, 'Stray.vue'), [
+        // Stray backtick followed by `${` inside a string: the permissive
+        // collector captured `${', x.count, ` here (quote-parity poisoning)
+        // and LOST the genuine template that follows on the same line.
+        "const row = fmt('`${', x.count, `${sep}.list.end`)",
+        'const msg = `Deleted ${count} rows. Undo?`',
+        'const key = `pages.${section}.title`',
+      ].join('\n'))
+
+      const result = await scanSourceFiles(tmpDir)
+      expect(result.bareDynamicCandidates).toEqual(new Set([
+        '`${_}.list.end`',
+        '`pages.${_}.title`',
+      ]))
+    })
+
+    it('drops key-shaped candidates over the max plausible key length', async () => {
+      const longKey = 'seg.'.repeat(40) // 160 chars of valid key charset
+      await writeFile(join(tmpDir, 'Long.vue'), [
+        `const long = \`${longKey}\${x}\``,
+        'const ok = `common.actions.${action}`',
+      ].join('\n'))
+
+      const result = await scanSourceFiles(tmpDir)
+      expect(result.bareDynamicCandidates).toEqual(new Set(['`common.actions.${_}`']))
+    })
+
+    it('rejects interpolation-only templates whose dot sits inside the interpolation', async () => {
+      await writeFile(join(tmpDir, 'InterpOnly.vue'), [
+        'const v = `${config.mode}`',
+      ].join('\n'))
+
+      const result = await scanSourceFiles(tmpDir)
+      expect(result.bareDynamicCandidates.size).toBe(0)
+    })
+
+    it('#284: suffix-only concat produces a bare ${_} candidate', async () => {
+      await writeFile(join(tmpDir, 'LockType.ts'), [
+        "const plural = lockType.translationPath + '.labelPlural'",
+      ].join('\n'))
+
+      const result = await scanSourceFiles(tmpDir)
+      expect(result.bareDynamicCandidates.has('`${_}.labelPlural`')).toBe(true)
+      const regexes = buildDynamicKeyRegexes([...result.bareDynamicCandidates].map(e => ({ expression: e })))
+      expect(regexes.some(re => re.test('components.integrations.pinCodeLock.labelPlural'))).toBe(true)
+    })
+
+    it('#284: suffix literal followed by more concat keeps a trailing wildcard', async () => {
+      await writeFile(join(tmpDir, 'Chain.ts'), [
+        "const key = base + '.fields' + suffix",
+      ].join('\n'))
+
+      const result = await scanSourceFiles(tmpDir)
+      expect(result.bareDynamicCandidates.has('`${_}.fields${_}`')).toBe(true)
+    })
+
+    it('#284: dot-leading literals without concat adjacency are not candidates', async () => {
+      await writeFile(join(tmpDir, 'NoConcat.ts'), [
+        "import styles from './styles.module'",
+        "const ext = '.json'",
+        "const cls = someEl.classList.contains('.active')",
+      ].join('\n'))
+
+      const result = await scanSourceFiles(tmpDir)
+      expect(result.bareDynamicCandidates.size).toBe(0)
+    })
+
+    it('#284: const-resolved bare templates become exact string candidates', async () => {
+      await writeFile(join(tmpDir, 'Bare.ts'), [
+        "const i18nBase = 'pages.widgets.config'",
+        'const key = `${i18nBase}.title`',
+      ].join('\n'))
+
+      const result = await scanSourceFiles(tmpDir)
+      expect(result.bareStringCandidates.has('pages.widgets.config.title')).toBe(true)
+      expect(result.bareDynamicCandidates.size).toBe(0)
+    })
+
+    it('ground truth: a mega-capture regex must not suppress unrelated orphans', async () => {
+      // The old capture `${', x.count, ` compiled to /^[^.]+$/ and dynamic-
+      // matched EVERY single-segment key; 'promo' must stay a safe orphan.
+      // The recovered genuine `${_}.list.end` still vouches for themes.list.end.
+      await writeFile(join(tmpDir, 'Stray.vue'), [
+        "const row = fmt('`${', x.count, `${sep}.list.end`)",
+        "const title = t('pages.home.title')",
+      ].join('\n'))
+
+      const result = await findOrphanKeysForConfig({
+        keysByLayer: new Map([['root', {
+          keys: ['promo', 'themes.list.end', 'pages.home.title'],
+          localeDir: { layer: 'root' },
+        }]]),
+        resolveIgnorePatterns: () => undefined,
+        scanDirs: [tmpDir],
+      })
+
+      expect(result.orphansByLayer.root ?? []).toEqual(['promo'])
+      expect(result.dynamicMatchedCount).toBe(1)
+    })
+  })
+
+  // #284 — the three anny-ui idioms that classified 34 live keys as safe
+  // orphans. Live keys must never land in orphansByLayer.
+  describe('variable-prefix ground truth (#284)', () => {
+    it('const-prefix template, member-expression template, and suffix concat all vouch for their keys', async () => {
+      await writeFile(join(tmpDir, 'WidgetConfigurator.vue'), [
+        "const i18nBase = 'pages.organization.settings.tabs.aiAgent.widgetConfigurator'",
+        'const title = t(`${i18nBase}.title`)',
+      ].join('\n'))
+      await writeFile(join(tmpDir, 'LockTypes.vue'), [
+        'const label = t(`${lockType.translationPath}.select`)',
+        "const plural = this.$t(lockType.translationPath + '.labelPlural')",
+      ].join('\n'))
+
+      const result = await findOrphanKeysForConfig({
+        keysByLayer: new Map([['root', {
+          keys: [
+            'pages.organization.settings.tabs.aiAgent.widgetConfigurator.title',
+            'components.integrations.pinCodeLock.select',
+            'components.integrations.pinCodeLock.labelPlural',
+            'truly.orphaned.key',
+          ],
+          localeDir: { layer: 'root' },
+        }]]),
+        resolveIgnorePatterns: () => undefined,
+        scanDirs: [tmpDir],
+      })
+
+      // The const-resolved key is an exact usage, the others dynamic-matched;
+      // only the genuinely unreferenced key survives as an orphan.
+      expect(result.orphansByLayer.root ?? []).toEqual(['truly.orphaned.key'])
+      expect(result.uncertainByLayer.root ?? []).toEqual([])
+    })
+  })
+
+  // #288 — the PHP interpolation shape must not run on Vue/JS files: Vue
+  // template attributes like v-if="$slots.header" are double-quoted strings
+  // containing $identifier.segment and compiled to `${_}.header`-class
+  // candidates suppressing every key ending in those segments.
+  describe('bare-shape language gating (#288)', () => {
+    it('Vue $slots/$attrs template attributes produce zero bare dynamic candidates', async () => {
+      await writeFile(join(tmpDir, 'Table.vue'), [
+        '<template>',
+        '  <thead v-if="$slots.header">',
+        '    <slot name="header" />',
+        '  </thead>',
+        '  <input @change="$attrs.change" />',
+        '  <div v-if="$slots.actions && !$slots.empty">',
+        '    <slot name="default" />',
+        '  </div>',
+        '</template>',
+      ].join('\n'))
+
+      const result = await scanSourceFiles(tmpDir)
+      expect(result.bareDynamicCandidates.size).toBe(0)
+    })
+
+    it('gating does not disturb genuine JS shapes in the same file', async () => {
+      await writeFile(join(tmpDir, 'Mixed.vue'), [
+        '<template>',
+        '  <div v-if="$slots.header" />',
+        '</template>',
+        '<script setup>',
+        'const key = `pages.${section}.title`',
+        "const plural = base.translationPath + '.labelPlural'",
+        '</script>',
+      ].join('\n'))
+
+      const result = await scanSourceFiles(tmpDir)
+      expect(result.bareDynamicCandidates).toEqual(new Set([
+        '`pages.${_}.title`',
+        '`${_}.labelPlural`',
+      ]))
+    })
+
+    it('ground truth: $slots junk must not dynamic-match unrelated keys ending in .header', async () => {
+      await writeFile(join(tmpDir, 'Card.vue'), [
+        '<template>',
+        '  <div v-if="$slots.header"><slot name="header" /></div>',
+        '</template>',
+      ].join('\n'))
+
+      const result = await findOrphanKeysForConfig({
+        keysByLayer: new Map([['root', {
+          keys: ['pages.dashboard.header', 'components.table.empty'],
+          localeDir: { layer: 'root' },
+        }]]),
+        resolveIgnorePatterns: () => undefined,
+        scanDirs: [tmpDir],
+      })
+
+      expect(result.orphansByLayer.root ?? []).toEqual(['components.table.empty', 'pages.dashboard.header'])
+      expect(result.dynamicMatchedCount).toBe(0)
+    })
   })
 })
 

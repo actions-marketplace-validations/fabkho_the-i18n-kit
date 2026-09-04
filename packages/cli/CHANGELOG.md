@@ -1,5 +1,240 @@
 # Changelog
 
+## [5.0.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-4.10.1...the-i18n-cli-5.0.0) (2026-08-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* **scanner:** scan conclusions change — comment references no longer count as usage (see candidateOnlyKeys), additional keys are recognised via real binding resolution, and Laravel projects must install the PHP peers explicitly (npm i -D php-parser php-array-reader) since php-array-reader left the dependency tree.
+
+### Features
+
+* find keys that carry the same value, not just the same path ([#396](https://github.com/fabkho/the-i18n-kit/issues/396)) ([02e60d1](https://github.com/fabkho/the-i18n-kit/commit/02e60d10bce4bda5623ff0d11d924bd1e41127e1))
+* **mcp:** surface the layer graph from discover ([#388](https://github.com/fabkho/the-i18n-kit/issues/388)) ([8753ee3](https://github.com/fabkho/the-i18n-kit/commit/8753ee3f423dcad31fb27c9a80c6e187c0cf5958)), closes [#342](https://github.com/fabkho/the-i18n-kit/issues/342)
+* move a translation key between layers in one operation ([#393](https://github.com/fabkho/the-i18n-kit/issues/393)) ([79a108e](https://github.com/fabkho/the-i18n-kit/commit/79a108ed741da71617db437f9f702bc1f823ffe9)), closes [#341](https://github.com/fabkho/the-i18n-kit/issues/341)
+* **scanner:** AST-only scanning — the full stack ([#419](https://github.com/fabkho/the-i18n-kit/issues/419)) ([6cff408](https://github.com/fabkho/the-i18n-kit/commit/6cff408e9a141ccd79e9f2fed34956a0cfed9a64))
+* **scanner:** pluggable language frontends, and an AST one for JS/TS/Vue ([#345](https://github.com/fabkho/the-i18n-kit/issues/345)) ([53577c4](https://github.com/fabkho/the-i18n-kit/commit/53577c4c5685718be22109012ad0f31636d7df3b))
+
+
+### Bug Fixes
+
+* **cli:** report check's findings as a tripped gate, not a failed run ([#381](https://github.com/fabkho/the-i18n-kit/issues/381)) ([7b53387](https://github.com/fabkho/the-i18n-kit/commit/7b53387f382a7f577454f312fa58f46c1170b92b))
+* **config:** require a key on every translation example ([#383](https://github.com/fabkho/the-i18n-kit/issues/383)) ([cdc3418](https://github.com/fabkho/the-i18n-kit/commit/cdc341813e98e8c36d36eb814148da80d17d93aa)), closes [#367](https://github.com/fabkho/the-i18n-kit/issues/367)
+* the config surface described nuxt.config.ts policy that [#372](https://github.com/fabkho/the-i18n-kit/issues/372) removed ([#384](https://github.com/fabkho/the-i18n-kit/issues/384)) ([7220e7b](https://github.com/fabkho/the-i18n-kit/commit/7220e7b19b7a3105930ad441df71b435612ce9a1)), closes [#380](https://github.com/fabkho/the-i18n-kit/issues/380) [#300](https://github.com/fabkho/the-i18n-kit/issues/300)
+
+## [4.10.1](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-4.10.0...the-i18n-cli-4.10.1) (2026-08-17)
+
+
+### Bug Fixes
+
+* **ci:** let a tripped gate redden the job without discarding the work ([#373](https://github.com/fabkho/the-i18n-kit/issues/373)) ([9b60261](https://github.com/fabkho/the-i18n-kit/commit/9b602616a9625b84ddd19df59a3db4f25354954a))
+* **config:** check every declaration site, and alias the name the docs use ([#375](https://github.com/fabkho/the-i18n-kit/issues/375)) ([ab1a268](https://github.com/fabkho/the-i18n-kit/commit/ab1a268a308baa7a7acf5a6354004243432f2a47)), closes [#362](https://github.com/fabkho/the-i18n-kit/issues/362) [#361](https://github.com/fabkho/the-i18n-kit/issues/361)
+* **config:** generate the published JSON Schema from the zod schema ([#346](https://github.com/fabkho/the-i18n-kit/issues/346)) ([#368](https://github.com/fabkho/the-i18n-kit/issues/368)) ([9bfcbc5](https://github.com/fabkho/the-i18n-kit/commit/9bfcbc5f788610dac079855ef0ee6f02746ec0a0))
+
+## [4.10.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-4.9.0...the-i18n-cli-4.10.0) (2026-08-16)
+
+
+### Features
+
+* tell users on the old package names that the kit has moved ([#338](https://github.com/fabkho/the-i18n-kit/issues/338)) ([18f146d](https://github.com/fabkho/the-i18n-kit/commit/18f146dfb3fea19102fb97b4ee745b41850aa7aa))
+
+## [4.9.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-4.8.1...the-i18n-cli-4.9.0) (2026-08-16)
+
+
+### Features
+
+* **release:** publish the packages under the [@the-i18n-kit](https://github.com/the-i18n-kit) scope too ([#336](https://github.com/fabkho/the-i18n-kit/issues/336)) ([f56f1c1](https://github.com/fabkho/the-i18n-kit/commit/f56f1c1b6097b4b99e24e9fd2c9542106a5a6da2)), closes [#315](https://github.com/fabkho/the-i18n-kit/issues/315)
+
+## [4.8.1](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-4.8.0...the-i18n-cli-4.8.1) (2026-08-16)
+
+
+### Bug Fixes
+
+* **generic:** support flat PHP locale files end to end ([#331](https://github.com/fabkho/the-i18n-kit/issues/331)) ([1533453](https://github.com/fabkho/the-i18n-kit/commit/15334532d97f3e28538339baf3b136707f34e3b1)), closes [#308](https://github.com/fabkho/the-i18n-kit/issues/308)
+* **scanner:** scan files in a stable order ([#334](https://github.com/fabkho/the-i18n-kit/issues/334)) ([bcc46b0](https://github.com/fabkho/the-i18n-kit/commit/bcc46b0c47d82526314e3d84383c767153071c20))
+* **scanner:** stop offering a used single-segment key for deletion ([#330](https://github.com/fabkho/the-i18n-kit/issues/330)) ([794104b](https://github.com/fabkho/the-i18n-kit/commit/794104baec93ee23a9a2152fb67fad0012358593)), closes [#298](https://github.com/fabkho/the-i18n-kit/issues/298)
+
+## [4.8.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-4.7.0...the-i18n-cli-4.8.0) (2026-08-16)
+
+
+### Features
+
+* **cli:** typed config, and read the framework's own config instead of guessing ([#328](https://github.com/fabkho/the-i18n-kit/issues/328)) ([83c22b8](https://github.com/fabkho/the-i18n-kit/commit/83c22b8e3c3b44e1fd39270e81c38225f1d44d5a)), closes [#324](https://github.com/fabkho/the-i18n-kit/issues/324)
+* **nuxt:** declare the kit's config in nuxt.config.ts, typed ([#322](https://github.com/fabkho/the-i18n-kit/issues/322)) ([25175a5](https://github.com/fabkho/the-i18n-kit/commit/25175a580fe2e805bf861e24c0fa6c531283e927))
+
+
+### Bug Fixes
+
+* **cli:** salvage a translate response that ends mid-object ([#326](https://github.com/fabkho/the-i18n-kit/issues/326)) ([8edfc23](https://github.com/fabkho/the-i18n-kit/commit/8edfc23183b7601704f0a20fa28eef0e7058a4d5)), closes [#325](https://github.com/fabkho/the-i18n-kit/issues/325)
+
+## [4.7.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-4.6.0...the-i18n-cli-4.7.0) (2026-08-14)
+
+
+### Features
+
+* **nuxt:** publish the layer graph and locale table from inside the build ([#319](https://github.com/fabkho/the-i18n-kit/issues/319)) ([4a64746](https://github.com/fabkho/the-i18n-kit/commit/4a64746fb27675308e4faaed559fde5a64ef1a70))
+
+## [4.6.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-4.5.0...the-i18n-cli-4.6.0) (2026-08-14)
+
+
+### Features
+
+* **cli:** gate translate on partial failures, and stop them being silent ([#317](https://github.com/fabkho/the-i18n-kit/issues/317)) ([7525579](https://github.com/fabkho/the-i18n-kit/commit/752557925a1630af4f6a6eb41e31e64f7ff7ce72)), closes [#316](https://github.com/fabkho/the-i18n-kit/issues/316)
+
+## [4.5.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-4.4.0...the-i18n-cli-4.5.0) (2026-08-14)
+
+
+### Features
+
+* **cli:** status — coverage per locale and per layer, with a --fail-under gate ([#311](https://github.com/fabkho/the-i18n-kit/issues/311)) ([8db7c96](https://github.com/fabkho/the-i18n-kit/commit/8db7c96128d79ce6f120fc9745b01e4130e4168d)), closes [#253](https://github.com/fabkho/the-i18n-kit/issues/253)
+
+
+### Bug Fixes
+
+* **cli:** register scan so it can actually be invoked ([#310](https://github.com/fabkho/the-i18n-kit/issues/310)) ([9db0f6e](https://github.com/fabkho/the-i18n-kit/commit/9db0f6e0e70281c61e004974d4af6cca601017f1)), closes [#307](https://github.com/fabkho/the-i18n-kit/issues/307)
+
+## [4.4.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-4.3.0...the-i18n-cli-4.4.0) (2026-08-13)
+
+
+### Features
+
+* **cli:** init — generate a schema-valid .i18n-mcp.json from detection ([#306](https://github.com/fabkho/the-i18n-kit/issues/306)) ([ac92dbd](https://github.com/fabkho/the-i18n-kit/commit/ac92dbdce1ff429c995383324f38ae138fa12392))
+
+
+### Bug Fixes
+
+* **cli:** report unresolved and ambiguous locale refs instead of dropping them ([#302](https://github.com/fabkho/the-i18n-kit/issues/302)) ([a257a5f](https://github.com/fabkho/the-i18n-kit/commit/a257a5f9237805f4003efff0a1f84d1868e06a18))
+
+## [4.3.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-4.2.0...the-i18n-cli-4.3.0) (2026-08-11)
+
+
+### Features
+
+* **cli:** provider baseUrl via flag, env and project config ([#282](https://github.com/fabkho/the-i18n-kit/issues/282)) ([af5cc9a](https://github.com/fabkho/the-i18n-kit/commit/af5cc9a9d0f9299e630f1ca0b379d2e8576fb672))
+* **cli:** resolveExitCode + --fail-on-missing / --fail-on-orphans CI gates ([#297](https://github.com/fabkho/the-i18n-kit/issues/297)) ([5324b59](https://github.com/fabkho/the-i18n-kit/commit/5324b59cd1f7c1791ef548506054e78d4d8942cb)), closes [#248](https://github.com/fabkho/the-i18n-kit/issues/248)
+
+## [4.2.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-4.1.1...the-i18n-cli-4.2.0) (2026-08-11)
+
+
+### Features
+
+* **ci:** trigger a follow-up MR pipeline after the translate auto-commit push ([#293](https://github.com/fabkho/the-i18n-kit/issues/293)) ([38f4e0b](https://github.com/fabkho/the-i18n-kit/commit/38f4e0b2bd837424d7c95099de3d7c3661ee39e2)), closes [#283](https://github.com/fabkho/the-i18n-kit/issues/283)
+* **cli:** make translate --layer optional — all-layers mode with aggregated totals ([#292](https://github.com/fabkho/the-i18n-kit/issues/292)) ([0126561](https://github.com/fabkho/the-i18n-kit/commit/012656152dbf4a09252234059832150d57b44810)), closes [#290](https://github.com/fabkho/the-i18n-kit/issues/290)
+
+
+### Bug Fixes
+
+* **cli:** gate bare-candidate shapes by pattern-set language ([#291](https://github.com/fabkho/the-i18n-kit/issues/291)) ([e71d55d](https://github.com/fabkho/the-i18n-kit/commit/e71d55d495ecbe8a2a4429920f66b78b9ed30e02)), closes [#288](https://github.com/fabkho/the-i18n-kit/issues/288)
+* **cli:** suppress variable-prefix dynamic keys in orphan scan ([#285](https://github.com/fabkho/the-i18n-kit/issues/285)) ([af54732](https://github.com/fabkho/the-i18n-kit/commit/af54732129ebc3dcf1d30cdf72b43e1dc9905fd6))
+
+## [4.1.1](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-4.1.0...the-i18n-cli-4.1.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* **cli:** deterministic orphan reports and orphanScan layer-key validation ([#268](https://github.com/fabkho/the-i18n-kit/issues/268)) ([ccec19a](https://github.com/fabkho/the-i18n-kit/commit/ccec19a5d34ef8bf8c95f93c6da9b644dc65a953))
+* **cli:** never classify indirectly-consumed or Laravel-idiom keys as hard findings ([#269](https://github.com/fabkho/the-i18n-kit/issues/269)) ([4a7f1a2](https://github.com/fabkho/the-i18n-kit/commit/4a7f1a2407909594f01f516fdd81c0fa67aaed46)), closes [#262](https://github.com/fabkho/the-i18n-kit/issues/262) [#267](https://github.com/fabkho/the-i18n-kit/issues/267)
+* **cli:** resolve relative --output-file against project dir, emit JSON error object on failure ([#280](https://github.com/fabkho/the-i18n-kit/issues/280)) ([181da7e](https://github.com/fabkho/the-i18n-kit/commit/181da7e28bad659a70e4d64b9097262fa4e92af7))
+* **cli:** restrict bare-template collector to key-shaped candidates ([#281](https://github.com/fabkho/the-i18n-kit/issues/281)) ([86b1a48](https://github.com/fabkho/the-i18n-kit/commit/86b1a48f16b6e70490f1765d3c94c45b4e997560)), closes [#275](https://github.com/fabkho/the-i18n-kit/issues/275)
+
+## [4.1.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-4.0.0...the-i18n-cli-4.1.0) (2026-08-10)
+
+
+### Features
+
+* **cli:** GitLab Code Quality output for check and remove-orphans ([#271](https://github.com/fabkho/the-i18n-kit/issues/271)) ([09a0e99](https://github.com/fabkho/the-i18n-kit/commit/09a0e99d7551b6722f9d12de931de28b8535fdd0)), closes [#270](https://github.com/fabkho/the-i18n-kit/issues/270)
+
+## [4.0.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-3.2.0...the-i18n-cli-4.0.0) (2026-08-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** locale write output formatting changed. Existing files keep their detected indentation, trailing newline, PHP quote style and existing key order instead of being normalized to tab indentation and fully re-sorted keys; new keys are inserted alphabetically among their siblings. Namespace files are now only deleted when the mutation explicitly removed the namespace, with a warning per deleted file.
+
+### Features
+
+* **cli:** check — used-but-undefined key detection with CI exit gating ([#245](https://github.com/fabkho/the-i18n-kit/issues/245)) ([6c4b9bf](https://github.com/fabkho/the-i18n-kit/commit/6c4b9bffec124529b415bcbfa1be21af00f715bf))
+* **cli:** find_duplicate_keys — cross-layer key collisions with divergence detection ([#243](https://github.com/fabkho/the-i18n-kit/issues/243)) ([cf2343d](https://github.com/fabkho/the-i18n-kit/commit/cf2343dcc6cd17dcf2400cb234e542c464ab54d7))
+* **cli:** layer graph — canonical layers, ownership, app-consumption edges ([#240](https://github.com/fabkho/the-i18n-kit/issues/240)) ([a2c2046](https://github.com/fabkho/the-i18n-kit/commit/a2c204616e7715dc68791ad22f9c931b3ec200f4)), closes [#234](https://github.com/fabkho/the-i18n-kit/issues/234)
+* **cli:** layer-scope-aware orphan scanning with misplaced-usage detection ([#244](https://github.com/fabkho/the-i18n-kit/issues/244)) ([04cc252](https://github.com/fabkho/the-i18n-kit/commit/04cc2521e323cf9b87e131b0fc39320182a731af))
+* **cli:** translate-missing alias for translate ([#230](https://github.com/fabkho/the-i18n-kit/issues/230)) ([3c3ca8b](https://github.com/fabkho/the-i18n-kit/commit/3c3ca8bf63e36818c6e38feeffc82a9037c78f38))
+
+
+### Bug Fixes
+
+* **cli:** preserve locale file formatting, deliberate deletes, PHP escaping, React flat layouts ([#241](https://github.com/fabkho/the-i18n-kit/issues/241)) ([d1a435b](https://github.com/fabkho/the-i18n-kit/commit/d1a435b4141f24d0b8473ed002f68930d137fe1d)), closes [#194](https://github.com/fabkho/the-i18n-kit/issues/194)
+* **cli:** unify locale-dir claim logic, stop dropping dirs behind alias owners ([#238](https://github.com/fabkho/the-i18n-kit/issues/238)) ([7ae3b8f](https://github.com/fabkho/the-i18n-kit/commit/7ae3b8fcbd23ee91c0fe51c9c6882520ee3f1495)), closes [#233](https://github.com/fabkho/the-i18n-kit/issues/233)
+
+## [3.2.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-3.1.0...the-i18n-cli-3.2.0) (2026-08-09)
+
+
+### Features
+
+* **cli:** protectedLocales — human-maintained locales excluded from auto-translation ([#226](https://github.com/fabkho/the-i18n-kit/issues/226)) ([8a9152e](https://github.com/fabkho/the-i18n-kit/commit/8a9152e8b71c911eaae842c563e2672126fa7e47)), closes [#211](https://github.com/fabkho/the-i18n-kit/issues/211)
+* **cli:** provider error classification, truncation detection, CI exit codes ([#225](https://github.com/fabkho/the-i18n-kit/issues/225)) ([b42991d](https://github.com/fabkho/the-i18n-kit/commit/b42991d520fad1004298fa069a3c23918b8b24cd))
+
+## [3.1.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-3.0.0...the-i18n-cli-3.1.0) (2026-08-09)
+
+
+### Features
+
+* **cli:** per-variant placeholder and plural-count validation ([#223](https://github.com/fabkho/the-i18n-kit/issues/223)) ([bf0b7e0](https://github.com/fabkho/the-i18n-kit/commit/bf0b7e0a36d0884455151c963256282cf8d07eca))
+
+## [3.0.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-2.0.0...the-i18n-cli-3.0.0) (2026-08-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** translate_missing and translate_key result shapes changed as described. All consumers (CLI output, MCP tools) updated.
+
+### Features
+
+* **cli:** honest translate result contract — mode, failed/skipped reasons, wouldTranslate ([#220](https://github.com/fabkho/the-i18n-kit/issues/220)) ([9d393bb](https://github.com/fabkho/the-i18n-kit/commit/9d393bb025ddfbf4481ac6f5df716366dc550a3e))
+
+## [2.0.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-1.5.7...the-i18n-cli-2.0.0) (2026-08-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** programmatic API renames — createSamplingFn is now createTranslateFn; translate operations take translateFn instead of samplingFn; Sampling* types are Translate* types. CLI commands and MCP tool surfaces are unaffected.
+
+### Features
+
+* **mcp:** align with MCP 2026-07-28 direction — SDK 1.30, stateless resources ([#217](https://github.com/fabkho/the-i18n-kit/issues/217)) ([fcfa34c](https://github.com/fabkho/the-i18n-kit/commit/fcfa34c8040f16093df9fab501139513bfd67def))
+
+
+### Code Refactoring
+
+* **cli:** rename translate seam SamplingFn → TranslateFn, drop model preferences ([#216](https://github.com/fabkho/the-i18n-kit/issues/216)) ([3355298](https://github.com/fabkho/the-i18n-kit/commit/3355298da6065192e7bcb68ef96ec9a648e41c74))
+
+## [1.5.7](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-1.5.6...the-i18n-cli-1.5.7) (2026-08-09)
+
+
+### Bug Fixes
+
+* **cli:** compact translate output keeps fallback contexts and locale metadata ([#213](https://github.com/fabkho/the-i18n-kit/issues/213)) ([8fea19c](https://github.com/fabkho/the-i18n-kit/commit/8fea19c209e505b66c7a8d4476155bca73347932))
+
+## [1.5.6](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-1.5.5...the-i18n-cli-1.5.6) (2026-08-09)
+
+
+### Bug Fixes
+
+* **ci:** cleanup jq backtick escapes + re-land --help stream fix ([#201](https://github.com/fabkho/the-i18n-kit/issues/201)) ([ec98436](https://github.com/fabkho/the-i18n-kit/commit/ec984361dc7ee52c39f0edc28dc30102ac414703))
+
+## [1.5.5](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-1.5.4...the-i18n-cli-1.5.5) (2026-08-09)
+
+
+### Bug Fixes
+
+* **cli:** guard stdout against third-party logs ([#199](https://github.com/fabkho/the-i18n-kit/issues/199)) ([a874e31](https://github.com/fabkho/the-i18n-kit/commit/a874e310518c18b3b1e88641f5b4a54b6b8da8ea))
+
+## [1.5.4](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-1.5.3...the-i18n-cli-1.5.4) (2026-08-08)
+
+
+### Bug Fixes
+
+* CI pipeline repairs — pure-JSON stdout, GitLab template, Action, playground e2e ([#190](https://github.com/fabkho/the-i18n-kit/issues/190)) ([d64a763](https://github.com/fabkho/the-i18n-kit/commit/d64a763b5c85f077d9971460a4f98c76f3258fed))
+
 ## [1.5.3](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-cli-1.5.2...the-i18n-cli-1.5.3) (2026-06-18)
 
 

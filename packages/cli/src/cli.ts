@@ -1,12 +1,15 @@
 import { createRequire } from 'node:module'
 import { defineCommand, runCommand, runMain } from 'citty'
-import { log } from './utils/logger.js'
 import { commands as allCommands } from './commands/index.js'
+import type { CommandEntry } from './commands/index.js'
+import { emitErrorResult } from './commands/_shared.js'
 
-// Hidden diagnostic commands: detect, list-dirs, empty, scan
-const hiddenCommands = new Set(['detect', 'list-dirs', 'empty', 'scan'])
+// Which commands are hidden is declared on the registry entries themselves, so
+// there is no second list here to fall out of step with it (#370).
 const commands = Object.fromEntries(
-  Object.entries(allCommands).filter(([key]) => !hiddenCommands.has(key)),
+  Object.entries(allCommands as Record<string, CommandEntry>)
+    .filter(([, entry]) => !entry.hidden)
+    .map(([name, entry]) => [name, entry.load]),
 )
 
 const require = createRequire(import.meta.url)
@@ -31,11 +34,14 @@ export async function runCli(): Promise<void> {
     return
   }
 
-  // For normal execution, use runCommand so we control error output
+  // For normal execution, use runCommand so we control error output.
+  // Command run() errors are handled inside createCommand; this catch only
+  // sees pre-run failures (unknown command, argument parsing) — those must
+  // also keep stdout parseable in JSON mode.
   try {
     await runCommand(main, { rawArgs })
   } catch (error: unknown) {
-    log.error(error)
+    emitErrorResult(error, { json: rawArgs.includes('--json') })
     process.exitCode = 1
   }
 }

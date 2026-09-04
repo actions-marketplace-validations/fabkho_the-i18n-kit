@@ -53,10 +53,8 @@ export class LaravelAdapter implements FrameworkAdapter {
       )
     }
 
-    // Determine file format: honor override, auto-detect, or default
     const format = resolveFormat(langDir, projectConfig?.localeFileFormat)
 
-    // Discover locale codes based on format
     const localeCodes = await discoverLocaleCodes(langDir, format)
     if (localeCodes.length === 0) {
       throw new ConfigError(
@@ -257,7 +255,7 @@ function extractPhpConfigValue(content: string, key: string): string | null {
   )
   const envMatch = content.match(envPattern)
   if (envMatch) {
-    return envMatch[1]
+    return envMatch[1] ?? null
   }
 
   const directPattern = new RegExp(
@@ -265,7 +263,7 @@ function extractPhpConfigValue(content: string, key: string): string | null {
   )
   const directMatch = content.match(directPattern)
   if (directMatch) {
-    return directMatch[1]
+    return directMatch[1] ?? null
   }
 
   return null
@@ -276,13 +274,15 @@ function extractPhpArrayValue(content: string, key: string): string[] {
     `['"]${key}['"]\\s*=>\\s*\\[([^\\]]*)]`,
   )
   const match = content.match(pattern)
-  if (!match) return []
+  const arrayBody = match?.[1]
+  if (arrayBody === undefined) return []
 
   const itemPattern = /['"]([^'"]+)['"]/g
   const items: string[] = []
   let itemMatch: RegExpExecArray | null
-  while ((itemMatch = itemPattern.exec(match[1])) !== null) {
-    items.push(itemMatch[1])
+  while ((itemMatch = itemPattern.exec(arrayBody)) !== null) {
+    const item = itemMatch[1]
+    if (item) items.push(item)
   }
   return items
 }

@@ -1,10 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, writeFile, rm, mkdir, readFile } from 'node:fs/promises'
+import { writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveLocaleEntries, readLocaleData, mutateLocaleData } from '../../src/io/locale-data.js'
 import { clearFileCache } from '../../src/io/json-reader.js'
 import { clearPhpFileCache } from '../../src/io/php-reader.js'
+import { log } from '../../src/utils/logger.js'
 import type { I18nConfig, LocaleDefinition } from '../../src/config/types.js'
 
 let tempDir: string
@@ -486,5 +488,223 @@ describe('mutateLocaleData', () => {
     const { existsSync } = await import('node:fs')
     expect(existsSync(join(tempDir, 'messages', 'en', 'auth.json'))).toBe(false)
     expect(existsSync(join(tempDir, 'messages', 'en', 'common.json'))).toBe(true)
+  })
+
+  it('logs a warning naming each namespace file it deletes', async () => {
+    await setupNextJsLocales()
+    const config = makeNextJsConfig()
+    const locale = config.locales[0]
+    const warnSpy = vi.spyOn(log, 'warn').mockImplementation(() => {})
+
+    try {
+      await mutateLocaleData(config, 'root', locale, (data) => {
+        delete data.auth
+      })
+
+      const messages = warnSpy.mock.calls.map(args => args.join(' '))
+      expect(messages.some(m => m.includes(join(tempDir, 'messages', 'en', 'auth.json')) && m.includes("'auth'"))).toBe(true)
+    }
+    finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('does not delete namespace files it did not explicitly remove', async () => {
+    await setupNextJsLocales()
+    const config = makeNextJsConfig()
+    const locale = config.locales[0]
+    const strayFile = join(tempDir, 'messages', 'en', 'stray.json')
+
+    await mutateLocaleData(config, 'root', locale, (data) => {
+      // Simulate a concurrent writer creating a namespace file after this
+      // mutation read the directory: it must survive the write-back.
+      writeFileSync(strayFile, JSON.stringify({ other: 'data' }))
+      ;(data.auth as Record<string, string>).login = 'Sign In'
+    })
+
+    const { existsSync } = await import('node:fs')
+    expect(existsSync(strayFile)).toBe(true)
+    expect(JSON.parse(await readFile(strayFile, 'utf-8'))).toEqual({ other: 'data' })
+  })
+
+  it('preserves 2-space indentation and existing key order on namespaced JSON writes', async () => {
+    const enDir = join(tempDir, 'messages', 'en')
+    await mkdir(enDir, { recursive: true })
+    await writeFile(join(enDir, 'common.json'), '{\n  "zebra": "z",\n  "apple": "a",\n  "mango": "m"\n}\n')
+
+    const config = makeNextJsConfig()
+    const locale = config.locales[0]
+
+    await mutateLocaleData(config, 'root', locale, (data) => {
+      ;(data.common as Record<string, string>).banana = 'b'
+    })
+
+    const content = await readFile(join(enDir, 'common.json'), 'utf-8')
+    expect(content).not.toContain('\t')
+    expect(content).toContain('  "zebra"')
+    expect(Object.keys(JSON.parse(content))).toEqual(['zebra', 'apple', 'banana', 'mango'])
+    expect(content.endsWith('\n')).toBe(true)
+  })
+
+  it('preserves indentation and key order on flat JSON writes', async () => {
+    const localesDir = join(tempDir, 'locales')
+    await mkdir(localesDir, { recursive: true })
+    await writeFile(join(localesDir, 'en.json'), '{\n  "zebra": "z",\n  "apple": "a"\n}\n')
+
+    const config = makeNuxtConfig()
+    const locale = config.locales[0]
+
+    await mutateLocaleData(config, 'root', locale, (data) => {
+      ;(data as Record<string, unknown>).mango = 'm'
+    })
+
+    const content = await readFile(join(localesDir, 'en.json'), 'utf-8')
+    expect(content).not.toContain('\t')
+    expect(content).toContain('  "zebra"')
+    expect(Object.keys(JSON.parse(content))).toEqual(['zebra', 'apple', 'mango'])
+  })
+
+  it('preserves PHP quote style and key order on namespaced PHP writes', async () => {
+    const enDir = join(tempDir, 'lang', 'en')
+    await mkdir(enDir, { recursive: true })
+    await writeFile(join(enDir, 'auth.php'), `<?php\n\nreturn [\n  'zebra' => 'z',\n  'apple' => 'a',\n];\n`)
+
+    const config = makeLaravelConfig()
+    const locale = config.locales[0]
+
+    await mutateLocaleData(config, 'root', locale, (data) => {
+      ;(data.auth as Record<string, string>).mango = 'm'
+    })
+
+    const content = await readFile(join(enDir, 'auth.php'), 'utf-8')
+    expect(content).toContain("  'zebra' => 'z',")
+    const order = ['zebra', 'apple', 'mango'].map(k => content.indexOf(`'${k}'`))
+    expect([...order].sort((a, b) => a - b)).toEqual(order)
+  })
+
+  it('writes new namespace files with sorted keys and default formatting', async () => {
+    await setupNextJsLocales()
+    const config = makeNextJsConfig()
+    const locale = config.locales[0]
+
+    await mutateLocaleData(config, 'root', locale, (data) => {
+      ;(data as Record<string, unknown>).profile = { title: 'My Profile', avatar: 'Avatar' }
+    })
+
+    const content = await readFile(join(tempDir, 'messages', 'en', 'profile.json'), 'utf-8')
+    expect(Object.keys(JSON.parse(content))).toEqual(['avatar', 'title'])
+    expect(content).toContain('\t"avatar"')
+  })
+})
+
+describe('resolveLocaleEntries flat-layout misconfiguration', () => {
+  it('warns loudly when a flat JSON file exists but the locale has no file set', async () => {
+    const localesDir = join(tempDir, 'locales')
+    await mkdir(localesDir, { recursive: true })
+    await writeFile(join(localesDir, 'en.json'), JSON.stringify({ hello: 'world' }))
+
+    const config = makeNuxtConfig({
+      locales: [{ code: 'en', language: 'en' }], // no `file`
+    })
+    const warnSpy = vi.spyOn(log, 'warn').mockImplementation(() => {})
+
+    try {
+      const entries = await resolveLocaleEntries(config, 'root', config.locales[0])
+      expect(entries).toEqual([])
+
+      const messages = warnSpy.mock.calls.map(args => args.join(' '))
+      expect(messages.some(m => m.includes("'en'") && m.includes("'root'") && m.includes('file'))).toBe(true)
+    }
+    finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('stays silent when neither a file nor a flat candidate exists (new locale)', async () => {
+    await mkdir(join(tempDir, 'locales'), { recursive: true })
+    const config = makeNuxtConfig({
+      locales: [{ code: 'fr', language: 'fr' }],
+    })
+    const warnSpy = vi.spyOn(log, 'warn').mockImplementation(() => {})
+
+    try {
+      const entries = await resolveLocaleEntries(config, 'root', config.locales[0])
+      expect(entries).toEqual([])
+      expect(warnSpy).not.toHaveBeenCalled()
+    }
+    finally {
+      warnSpy.mockRestore()
+    }
+  })
+})
+
+describe('flat PHP locale files (#308)', () => {
+  /**
+   * `php-array` meant Laravel's lang/<locale>/<namespace>.php, always. A flat
+   * lang/<locale>.php could not be resolved, and the write path would have
+   * restructured it into directories rather than editing it. What is on disk
+   * decides now; the format is only the fallback when there is nothing there
+   * yet to observe.
+   */
+  function makeFlatPhpConfig(overrides: Partial<I18nConfig> = {}): I18nConfig {
+    return {
+      rootDir: tempDir,
+      defaultLocale: 'en',
+      fallbackLocale: { default: ['en'] },
+      locales: [
+        { code: 'en', language: 'en', file: 'en.php' },
+        { code: 'de', language: 'de', file: 'de.php' },
+      ],
+      localeDirs: [{ path: join(tempDir, 'lang'), layer: 'default', layerRootDir: tempDir }],
+      layerRootDirs: [tempDir],
+      localeFileFormat: 'php-array',
+      apps: [{ name: 'default', rootDir: tempDir, layers: ['default'] }],
+      ...overrides,
+    }
+  }
+
+  const de: LocaleDefinition = { code: 'de', language: 'de', file: 'de.php' }
+
+  beforeEach(async () => {
+    await mkdir(join(tempDir, 'lang'), { recursive: true })
+    await writeFile(join(tempDir, 'lang', 'de.php'), '<?php\nreturn [\n  "save" => "Speichern",\n];\n')
+  })
+
+  it('resolves the flat file', async () => {
+    const entries = await resolveLocaleEntries(makeFlatPhpConfig(), 'default', de)
+
+    expect(entries).toEqual([{ path: join(tempDir, 'lang', 'de.php'), namespace: null }])
+  })
+
+  it('reads its keys unnamespaced', async () => {
+    const data = await readLocaleData(makeFlatPhpConfig(), 'default', de)
+
+    expect(data).toEqual({ save: 'Speichern' })
+  })
+
+  it('writes back into the same file instead of creating a directory', async () => {
+    const written = await mutateLocaleData(makeFlatPhpConfig(), 'default', de, (data) => {
+      data.cancel = 'Abbrechen'
+    })
+
+    expect([...written]).toEqual([join(tempDir, 'lang', 'de.php')])
+
+    const onDisk = await readFile(join(tempDir, 'lang', 'de.php'), 'utf-8')
+    expect(onDisk).toContain('"cancel" => "Abbrechen"')
+    expect(onDisk).toContain('"save" => "Speichern"')
+  })
+
+  // The Laravel layout must keep working: entries carry a namespace, so the
+  // namespaced write path still applies.
+  it('still treats a namespaced PHP layout as namespaced', async () => {
+    await mkdir(join(tempDir, 'lang', 'de'), { recursive: true })
+    await writeFile(join(tempDir, 'lang', 'de', 'auth.php'), '<?php\nreturn [\n  "failed" => "Fehlgeschlagen",\n];\n')
+
+    const config = makeFlatPhpConfig({
+      locales: [{ code: 'de', language: 'de' }],
+    })
+    const entries = await resolveLocaleEntries(config, 'default', { code: 'de', language: 'de' })
+
+    expect(entries.map(e => e.namespace)).toEqual(['auth'])
   })
 })

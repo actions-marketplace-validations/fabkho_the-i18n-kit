@@ -43,6 +43,24 @@ describe('loadProjectConfig', () => {
     }
   })
 
+  // Deprecation shim: samplingPreferences must keep validating (strict schema)
+  it('accepts deprecated samplingPreferences with a warning and strips it', async () => {
+    await mkdir(tmpDir, { recursive: true })
+    const configPath = resolve(tmpDir, '.i18n-mcp.json')
+    try {
+      await writeFile(configPath, JSON.stringify({
+        context: 'shim test',
+        samplingPreferences: { hints: ['flash'], costPriority: 0.8 },
+      }), 'utf-8')
+      const config = await loadProjectConfig(tmpDir)
+      expect(config).not.toBeNull()
+      expect(config!.context).toBe('shim test')
+      expect('samplingPreferences' in config!).toBe(false)
+    } finally {
+      if (existsSync(configPath)) await unlink(configPath)
+    }
+  })
+
   // Test 4: throws on invalid JSON
   it('throws on invalid JSON', async () => {
     await mkdir(tmpDir, { recursive: true })
@@ -207,6 +225,73 @@ describe('loadProjectConfig', () => {
     }
   })
 
+  it('accepts providerBaseUrl as a string', async () => {
+    await mkdir(tmpDir, { recursive: true })
+    const configPath = resolve(tmpDir, '.i18n-mcp.json')
+    try {
+      await writeFile(configPath, JSON.stringify({ providerBaseUrl: 'https://gateway.example/v1' }), 'utf-8')
+      const config = await loadProjectConfig(tmpDir)
+      expect(config!.providerBaseUrl).toBe('https://gateway.example/v1')
+    } finally {
+      if (existsSync(configPath)) await unlink(configPath)
+    }
+  })
+
+  // A blank flag or env var is normalised to "unset" because shells produce
+  // those by accident. A blank in the config file cannot, so it is rejected
+  // here rather than silently ignored — matching every other string field.
+  it('rejects a blank providerBaseUrl instead of treating it as unset', async () => {
+    await mkdir(tmpDir, { recursive: true })
+    const configPath = resolve(tmpDir, '.i18n-mcp.json')
+    try {
+      await writeFile(configPath, JSON.stringify({ providerBaseUrl: '' }), 'utf-8')
+      await expect(loadProjectConfig(tmpDir)).rejects.toThrow(/providerBaseUrl/)
+
+      await writeFile(configPath, JSON.stringify({ providerBaseUrl: '   ' }), 'utf-8')
+      await expect(loadProjectConfig(tmpDir)).rejects.toThrow(/providerBaseUrl/)
+    } finally {
+      if (existsSync(configPath)) await unlink(configPath)
+    }
+  })
+
+  // The prompt builder renders `- ${ex.key}: …` unconditionally, so an entry
+  // without a key reached the provider as the literal word "undefined" —
+  // offered to the model as a translation key to imitate (#367).
+  it('rejects an examples entry with no key, naming the field', async () => {
+    await mkdir(tmpDir, { recursive: true })
+    const configPath = resolve(tmpDir, '.i18n-mcp.json')
+    try {
+      await writeFile(configPath, JSON.stringify({
+        examples: [{ de: 'Buchung', 'en-us': 'Booking' }],
+      }), 'utf-8')
+
+      await expect(loadProjectConfig(tmpDir)).rejects.toThrow(/key/)
+    } finally {
+      if (existsSync(configPath)) await unlink(configPath)
+    }
+  })
+
+  it('keeps note optional and accepts any locale code alongside the key', async () => {
+    await mkdir(tmpDir, { recursive: true })
+    const configPath = resolve(tmpDir, '.i18n-mcp.json')
+    try {
+      await writeFile(configPath, JSON.stringify({
+        examples: [
+          { key: 'common.actions.save', de: 'Speichern', 'en-us': 'Save' },
+          { key: 'common.terms.booking', de: 'Buchung', note: 'never "Reservierung"' },
+        ],
+      }), 'utf-8')
+
+      const config = await loadProjectConfig(tmpDir)
+
+      expect(config!.examples).toHaveLength(2)
+      expect(config!.examples![0]!['en-us']).toBe('Save')
+      expect(config!.examples![1]!.note).toBe('never "Reservierung"')
+    } finally {
+      if (existsSync(configPath)) await unlink(configPath)
+    }
+  })
+
   it('accepts orphanScan without ignorePatterns (optional field)', async () => {
     await mkdir(tmpDir, { recursive: true })
     const configPath = resolve(tmpDir, '.i18n-mcp.json')
@@ -288,6 +373,43 @@ describe('loadProjectConfig', () => {
     try {
       await writeFile(configPath, JSON.stringify({ reportOutput: '' }), 'utf-8')
       await expect(loadProjectConfig(tmpDir)).rejects.toThrow(/reportOutput/)
+    } finally {
+      if (existsSync(configPath)) await unlink(configPath)
+    }
+  })
+
+  it('accepts protectedLocales as an array of locale refs', async () => {
+    await mkdir(tmpDir, { recursive: true })
+    const configPath = resolve(tmpDir, '.i18n-mcp.json')
+    try {
+      await writeFile(configPath, JSON.stringify({
+        protectedLocales: ['en-US', 'en-GB', 'de-DE-formal.json'],
+      }), 'utf-8')
+      const config = await loadProjectConfig(tmpDir)
+      expect(config).not.toBeNull()
+      expect(config!.protectedLocales).toEqual(['en-US', 'en-GB', 'de-DE-formal.json'])
+    } finally {
+      if (existsSync(configPath)) await unlink(configPath)
+    }
+  })
+
+  it('throws when protectedLocales is not an array', async () => {
+    await mkdir(tmpDir, { recursive: true })
+    const configPath = resolve(tmpDir, '.i18n-mcp.json')
+    try {
+      await writeFile(configPath, JSON.stringify({ protectedLocales: 'en-US' }), 'utf-8')
+      await expect(loadProjectConfig(tmpDir)).rejects.toThrow(/protectedLocales/)
+    } finally {
+      if (existsSync(configPath)) await unlink(configPath)
+    }
+  })
+
+  it('throws when protectedLocales contains empty or whitespace-only entries', async () => {
+    await mkdir(tmpDir, { recursive: true })
+    const configPath = resolve(tmpDir, '.i18n-mcp.json')
+    try {
+      await writeFile(configPath, JSON.stringify({ protectedLocales: ['en-US', '  '] }), 'utf-8')
+      await expect(loadProjectConfig(tmpDir)).rejects.toThrow(/protectedLocales/)
     } finally {
       if (existsSync(configPath)) await unlink(configPath)
     }

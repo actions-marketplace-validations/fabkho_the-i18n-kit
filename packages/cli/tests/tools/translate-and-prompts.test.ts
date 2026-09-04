@@ -1,24 +1,16 @@
-import { describe, it, expect, afterEach, beforeEach, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import { resolve, join } from 'node:path'
 import { cp, rm, mkdir } from 'node:fs/promises'
-import type { I18nConfig } from '../../src/config/types.js'
 import { readLocaleFile } from '../../src/io/json-reader.js'
 import { mutateLocaleFile } from '../../src/io/json-writer.js'
 import {
   getNestedValue,
-  getLeafKeys,
   hasNestedKey,
   setNestedValue,
-  removeNestedValue,
 } from '../../src/io/key-operations.js'
 import { loadProjectConfig } from '../../src/config/project-config.js'
-import { registerDetectorMock, playgroundDir, appAdminDir } from '../fixtures/mock-detector.js'
-import { computeProgressTotal, resolveSamplingPreferences, DEFAULT_SAMPLING_PREFERENCES, buildTranslationSystemPrompt, buildTranslationUserMessage, extractJsonFromResponse, computeMaxTokens } from '../../src/core/operations.js'
-
-// Register the shared detector mock (vi.mock is hoisted by Vitest)
-registerDetectorMock()
-
-const { detectI18nConfig, clearConfigCache } = await import('../../src/config/detector.js')
+import { playgroundDir } from '../fixtures/mock-detector.js'
+import { computeProgressTotal, buildTranslationSystemPrompt, buildTranslationUserMessage, extractJsonFromResponse, computeMaxTokens } from '../../src/core/operations.js'
 
 // Temp copy of locale dirs for mutation tests
 const tmpDir = resolve(import.meta.dirname, '../../.tmp-translate')
@@ -164,580 +156,6 @@ describe('translate_missing: writing translations', () => {
   })
 })
 
-// ─── Batch chunking logic ────────────────────────────────────────
-
-describe('batch chunking logic', () => {
-  it('splits keys into batches of configurable size', () => {
-    const keys = Array.from({ length: 120 }, (_, i) => [`key.${i}`, `value ${i}`] as const)
-    const batchSize = 50
-    const batches: Array<Record<string, string>> = []
-
-    for (let i = 0; i < keys.length; i += batchSize) {
-      batches.push(Object.fromEntries(keys.slice(i, i + batchSize)))
-    }
-
-    expect(batches).toHaveLength(3)
-    expect(Object.keys(batches[0])).toHaveLength(50)
-    expect(Object.keys(batches[1])).toHaveLength(50)
-    expect(Object.keys(batches[2])).toHaveLength(20)
-  })
-
-  it('single batch when keys are fewer than batch size', () => {
-    const keys = Array.from({ length: 10 }, (_, i) => [`key.${i}`, `value ${i}`] as const)
-    const batchSize = 50
-    const batches: Array<Record<string, string>> = []
-
-    for (let i = 0; i < keys.length; i += batchSize) {
-      batches.push(Object.fromEntries(keys.slice(i, i + batchSize)))
-    }
-
-    expect(batches).toHaveLength(1)
-    expect(Object.keys(batches[0])).toHaveLength(10)
-  })
-
-  it('handles exact batch size boundary', () => {
-    const keys = Array.from({ length: 50 }, (_, i) => [`key.${i}`, `value ${i}`] as const)
-    const batchSize = 50
-    const batches: Array<Record<string, string>> = []
-
-    for (let i = 0; i < keys.length; i += batchSize) {
-      batches.push(Object.fromEntries(keys.slice(i, i + batchSize)))
-    }
-
-    expect(batches).toHaveLength(1)
-    expect(Object.keys(batches[0])).toHaveLength(50)
-  })
-})
-
-// ─── Fallback context construction ───────────────────────────────
-
-describe('fallback context for non-sampling hosts', () => {
-  it('builds fallback context with all project config fields', async () => {
-    const projectConfig = await loadProjectConfig(playgroundDir)
-    expect(projectConfig).not.toBeNull()
-
-    const referenceLocale = 'de-DE'
-    const targetLocale = 'es-ES'
-    const keysAndValues = {
-      'admin.users.list': 'Benutzerliste',
-      'admin.users.create': 'Benutzer erstellen',
-    }
-
-    // Same logic as buildFallbackContext
-    const context: Record<string, unknown> = {
-      instruction: `Translate these keys from ${referenceLocale} to ${targetLocale}, then call add_translations to write them.`,
-      referenceLocale,
-      targetLocale,
-      keysToTranslate: keysAndValues,
-    }
-
-    if (projectConfig!.translationPrompt) {
-      context.translationPrompt = projectConfig!.translationPrompt
-    }
-    if (projectConfig!.glossary && Object.keys(projectConfig!.glossary).length > 0) {
-      context.glossary = projectConfig!.glossary
-    }
-    if (projectConfig!.localeNotes?.[targetLocale]) {
-      context.localeNote = projectConfig!.localeNotes[targetLocale]
-    }
-    if (projectConfig!.examples && projectConfig!.examples.length > 0) {
-      context.examples = projectConfig!.examples
-    }
-
-    expect(context.instruction).toContain('de-DE')
-    expect(context.instruction).toContain('es-ES')
-    expect(context.keysToTranslate).toEqual(keysAndValues)
-    expect(context.translationPrompt).toBeDefined()
-    expect(context.glossary).toBeDefined()
-    expect(context.localeNote).toBe(projectConfig!.localeNotes!['es-ES'])
-    expect(context.examples).toEqual(projectConfig!.examples)
-  })
-
-  it('builds minimal fallback context without project config', () => {
-    const referenceLocale = 'de-DE'
-    const targetLocale = 'fr-FR'
-    const keysAndValues = {
-      'common.actions.save': 'Speichern',
-    }
-
-    const context: Record<string, unknown> = {
-      instruction: `Translate these keys from ${referenceLocale} to ${targetLocale}, then call add_translations to write them.`,
-      referenceLocale,
-      targetLocale,
-      keysToTranslate: keysAndValues,
-    }
-
-    // No project config — context should only have the basics
-    expect(context.instruction).toContain('de-DE')
-    expect(context.instruction).toContain('fr-FR')
-    expect(context.keysToTranslate).toEqual(keysAndValues)
-    expect(context.translationPrompt).toBeUndefined()
-    expect(context.glossary).toBeUndefined()
-    expect(context.localeNote).toBeUndefined()
-    expect(context.examples).toBeUndefined()
-  })
-
-  it('includes only the relevant locale note for the target', async () => {
-    const projectConfig = await loadProjectConfig(playgroundDir)
-
-    // Check de-DE note
-    const contextDe: Record<string, unknown> = {}
-    if (projectConfig!.localeNotes?.['de-DE']) {
-      contextDe.localeNote = projectConfig!.localeNotes['de-DE']
-    }
-    expect(contextDe.localeNote).toContain('German')
-
-    // Check en-US note
-    const contextEn: Record<string, unknown> = {}
-    if (projectConfig!.localeNotes?.['en-US']) {
-      contextEn.localeNote = projectConfig!.localeNotes['en-US']
-    }
-    expect(contextEn.localeNote).toContain('American English')
-
-    // Check nonexistent locale note
-    const contextNone: Record<string, unknown> = {}
-    if (projectConfig!.localeNotes?.['ja-JP']) {
-      contextNone.localeNote = projectConfig!.localeNotes['ja-JP']
-    }
-    expect(contextNone.localeNote).toBeUndefined()
-  })
-})
-
-// ─── Sampling response parsing ───────────────────────────────────
-
-describe('sampling response JSON parsing', () => {
-  it('parses clean JSON response', () => {
-    const responseText = '{"admin.users.list": "Lista de usuarios", "admin.users.create": "Crear usuario"}'
-    const parsed = JSON.parse(responseText) as Record<string, string>
-
-    expect(parsed['admin.users.list']).toBe('Lista de usuarios')
-    expect(parsed['admin.users.create']).toBe('Crear usuario')
-  })
-
-  it('handles JSON with markdown code fences', () => {
-    const responseText = '```json\n{"admin.users.list": "Lista de usuarios"}\n```'
-
-    let cleanJson = responseText.trim()
-    if (cleanJson.startsWith('```')) {
-      cleanJson = cleanJson.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
-    }
-
-    const parsed = JSON.parse(cleanJson) as Record<string, string>
-    expect(parsed['admin.users.list']).toBe('Lista de usuarios')
-  })
-
-  it('handles JSON with bare code fences (no language tag)', () => {
-    const responseText = '```\n{"key": "value"}\n```'
-
-    let cleanJson = responseText.trim()
-    if (cleanJson.startsWith('```')) {
-      cleanJson = cleanJson.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
-    }
-
-    const parsed = JSON.parse(cleanJson) as Record<string, string>
-    expect(parsed['key']).toBe('value')
-  })
-
-  it('handles response with leading/trailing whitespace', () => {
-    const responseText = '  \n  {"key": "value"}  \n  '
-
-    const cleanJson = responseText.trim()
-    const parsed = JSON.parse(cleanJson) as Record<string, string>
-    expect(parsed['key']).toBe('value')
-  })
-
-  it('preserves placeholders in parsed translations', () => {
-    const responseText = '{"greeting": "Hola, {name}!", "count": "{n} elementos"}'
-    const parsed = JSON.parse(responseText) as Record<string, string>
-
-    expect(parsed['greeting']).toContain('{name}')
-    expect(parsed['count']).toContain('{n}')
-  })
-
-  it('preserves linked references in parsed translations', () => {
-    const responseText = '{"field.required": "@:common.errors.required"}'
-    const parsed = JSON.parse(responseText) as Record<string, string>
-
-    expect(parsed['field.required']).toBe('@:common.errors.required')
-  })
-})
-
-// ─── Prompt content structure ────────────────────────────────────
-
-describe('add-feature-translations prompt structure', () => {
-  let config: I18nConfig
-
-  beforeAll(async () => {
-    config = await detectI18nConfig(playgroundDir)
-  })
-
-  afterAll(() => {
-    clearConfigCache()
-  })
-
-  it('prompt would include project context when available', () => {
-    const pc = config.projectConfig
-
-    expect(pc).toBeDefined()
-
-    // Simulate what the prompt handler builds
-    const parts: string[] = []
-    if (pc?.context) parts.push(`PROJECT CONTEXT: ${pc.context}`)
-    if (pc?.layerRules) {
-      parts.push('LAYER RULES:')
-      for (const rule of pc.layerRules) {
-        parts.push(`- ${rule.layer}: ${rule.description}`)
-      }
-    }
-    if (pc?.glossary) {
-      parts.push('GLOSSARY:')
-      for (const [term, def] of Object.entries(pc.glossary)) {
-        parts.push(`- ${term} → ${def}`)
-      }
-    }
-
-    const combined = parts.join('\n')
-    expect(combined).toContain('PROJECT CONTEXT')
-    expect(combined).toContain('LAYER RULES')
-    expect(combined).toContain('root')
-    expect(combined).toContain('app-admin')
-    expect(combined).toContain('GLOSSARY')
-    expect(combined).toContain('Buchung')
-    expect(combined).toContain('Booking')
-  })
-
-  it('prompt workflow mentions all required tool calls', () => {
-    const promptText = `Follow these steps:
-1. Call \`detect_i18n_config\` to understand the project setup.
-2. Call \`search_translations\` to check for existing similar keys.
-3. Call \`add_translations\` to add keys for ALL locales.
-4. Call \`translate_missing\` to fill in the rest.
-5. Summarize what was added.`
-
-    expect(promptText).toContain('detect_i18n_config')
-    expect(promptText).toContain('search_translations')
-    expect(promptText).toContain('add_translations')
-    expect(promptText).toContain('translate_missing')
-  })
-})
-
-describe('fix-missing-translations prompt structure', () => {
-  let config: I18nConfig
-
-  beforeAll(async () => {
-    config = await detectI18nConfig(playgroundDir)
-  })
-
-  afterAll(() => {
-    clearConfigCache()
-  })
-
-  it('prompt would include glossary and translation style', () => {
-    const pc = config.projectConfig
-
-    expect(pc).toBeDefined()
-
-    const parts: string[] = []
-    if (pc?.translationPrompt) {
-      parts.push(`TRANSLATION STYLE: ${pc.translationPrompt}`)
-    }
-    if (pc?.glossary) {
-      parts.push('GLOSSARY:')
-      for (const [term, def] of Object.entries(pc.glossary)) {
-        parts.push(`- ${term} → ${def}`)
-      }
-    }
-
-    const combined = parts.join('\n')
-    expect(combined).toContain('TRANSLATION STYLE')
-    expect(combined).toContain('GLOSSARY')
-    expect(combined).toContain('Buchung')
-  })
-
-  it('prompt workflow mentions required tool calls', () => {
-    const promptText = `Follow these steps:
-1. Call \`detect_i18n_config\` to load the project config.
-2. Call \`get_missing_translations\` to find all gaps.
-3. Call \`translate_missing\` to auto-fill gaps.
-4. Report a summary.`
-
-    expect(promptText).toContain('detect_i18n_config')
-    expect(promptText).toContain('get_missing_translations')
-    expect(promptText).toContain('translate_missing')
-  })
-})
-
-// ─── translate_missing: batch retry logic ────────────────────────────────────
-
-type SamplingFn = (batch: Record<string, string>) => Promise<Record<string, string>>
-type WarnFn = (msg: string) => void
-
-async function runBatchWithRetry(
-  batch: Record<string, string>,
-  batchNum: number,
-  localeCode: string,
-  doSampling: SamplingFn,
-  warn: WarnFn,
-): Promise<{ translations: Record<string, string> | null }> {
-  let batchTranslations: Record<string, string> | null = null
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      batchTranslations = await doSampling(batch)
-      break // success — stop retrying
-    }
-    catch (error) {
-      if (attempt === 0) {
-        warn(`Sampling failed for batch ${batchNum} in ${localeCode}, retrying: ${error instanceof Error ? error.message : String(error)}`)
-      }
-      else {
-        warn(`Sampling retry failed for batch ${batchNum} in ${localeCode}: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
-  }
-
-  return { translations: batchTranslations }
-}
-
-describe('translate_missing: batch retry logic', () => {
-  it('returns translations on first attempt without retrying', async () => {
-    const batch = { 'common.save': 'Speichern' }
-    const expected = { 'common.save': 'Save' }
-    let callCount = 0
-
-    const doSampling: SamplingFn = async () => {
-      callCount++
-      return expected
-    }
-
-    const warnings: string[] = []
-    const { translations } = await runBatchWithRetry(batch, 1, 'en-US', doSampling, w => warnings.push(w))
-
-    expect(translations).toEqual(expected)
-    expect(callCount).toBe(1)
-    expect(warnings).toHaveLength(0)
-  })
-
-  it('retries once and returns translations when second attempt succeeds', async () => {
-    const batch = { 'common.save': 'Speichern' }
-    const expected = { 'common.save': 'Save' }
-    let callCount = 0
-
-    const doSampling: SamplingFn = async () => {
-      callCount++
-      if (callCount === 1) throw new Error('timeout')
-      return expected
-    }
-
-    const warnings: string[] = []
-    const { translations } = await runBatchWithRetry(batch, 2, 'en-US', doSampling, w => warnings.push(w))
-
-    expect(translations).toEqual(expected)
-    expect(callCount).toBe(2)
-    expect(warnings).toHaveLength(1)
-    expect(warnings[0]).toContain('retrying')
-    expect(warnings[0]).toContain('batch 2')
-    expect(warnings[0]).toContain('en-US')
-    expect(warnings[0]).toContain('timeout')
-  })
-
-  it('returns null and logs both warnings when both attempts fail', async () => {
-    const batch = { 'common.save': 'Speichern', 'common.cancel': 'Abbrechen' }
-    let callCount = 0
-
-    const doSampling: SamplingFn = async () => {
-      callCount++
-      throw new Error(`network error attempt ${callCount}`)
-    }
-
-    const warnings: string[] = []
-    const { translations } = await runBatchWithRetry(batch, 3, 'fr-FR', doSampling, w => warnings.push(w))
-
-    expect(translations).toBeNull()
-    expect(callCount).toBe(2)
-    expect(warnings).toHaveLength(2)
-    expect(warnings[0]).toContain('retrying')
-    expect(warnings[0]).toContain('batch 3')
-    expect(warnings[0]).toContain('fr-FR')
-    expect(warnings[1]).toContain('retry failed')
-    expect(warnings[1]).toContain('batch 3')
-    expect(warnings[1]).toContain('fr-FR')
-  })
-
-  it('keys from a failed batch go to failed array (double failure)', async () => {
-    const batch = { 'admin.users.list': 'Benutzerliste', 'admin.users.edit': 'Benutzer bearbeiten' }
-
-    const doSampling: SamplingFn = async () => {
-      throw new Error('JSON parse error')
-    }
-
-    const failed: string[] = []
-    const { translations } = await runBatchWithRetry(batch, 1, 'es-ES', doSampling, () => {})
-
-    if (translations === null) {
-      failed.push(...Object.keys(batch))
-    }
-
-    expect(translations).toBeNull()
-    expect(failed).toEqual(['admin.users.list', 'admin.users.edit'])
-  })
-
-  it('translations accumulate normally after successful retry', async () => {
-    const batch1 = { 'common.save': 'Speichern' }
-    const batch2 = { 'common.cancel': 'Abbrechen' }
-    let batch1Calls = 0
-
-    const makeSampling = (successResult: Record<string, string>, failFirstTime: boolean): SamplingFn => {
-      let calls = 0
-      return async () => {
-        calls++
-        if (failFirstTime && calls === 1) throw new Error('transient error')
-        return successResult
-      }
-    }
-
-    const allTranslations: Record<string, string> = {}
-
-    for (const [batch, sampling] of [
-      [batch1, makeSampling({ 'common.save': 'Save' }, true)],
-      [batch2, makeSampling({ 'common.cancel': 'Cancel' }, false)],
-    ] as Array<[Record<string, string>, SamplingFn]>) {
-      const { translations } = await runBatchWithRetry(batch, ++batch1Calls, 'en-US', sampling, () => {})
-      if (translations !== null) {
-        for (const [key, value] of Object.entries(translations)) {
-          if (typeof value === 'string') allTranslations[key] = value
-        }
-      }
-    }
-
-    expect(allTranslations).toEqual({ 'common.save': 'Save', 'common.cancel': 'Cancel' })
-  })
-})
-
-// ─── translate_missing: write error resilience ───────────────────
-
-describe('translate_missing: write error resilience', () => {
-  it('write error caught — locale result has writeError field with error message', () => {
-    const keysAndValues = {
-      'admin.users.list': 'Benutzerliste',
-      'admin.users.create': 'Benutzer erstellen',
-    }
-    const translated: string[] = ['admin.users.list', 'admin.users.create']
-    const failed: string[] = []
-    const results: Record<string, { translated: string[]; failed: string[]; samplingUsed: boolean; writeError?: string }> = {}
-    const targetCode = 'es-ES'
-
-    const allTranslations = {
-      'admin.users.list': 'Lista de usuarios',
-      'admin.users.create': 'Crear usuario',
-    }
-
-    const writeError = new Error('EACCES: permission denied')
-    try {
-      if (Object.keys(allTranslations).length > 0) {
-        throw writeError
-      }
-      results[targetCode] = { translated, failed, samplingUsed: true }
-    } catch (error) {
-      failed.push(...translated)
-      translated.length = 0
-      results[targetCode] = {
-        translated: [],
-        failed: [...Object.keys(keysAndValues)],
-        samplingUsed: true,
-        writeError: error instanceof Error ? error.message : String(error),
-      }
-    }
-
-    expect(results[targetCode].writeError).toBe('EACCES: permission denied')
-    expect(results[targetCode].samplingUsed).toBe(true)
-  })
-
-  it('write error caught — all keys moved to failed, translated is empty', () => {
-    const keysAndValues = {
-      'admin.users.list': 'Benutzerliste',
-      'admin.users.create': 'Benutzer erstellen',
-      'admin.users.edit': 'Benutzer bearbeiten',
-    }
-    const translated: string[] = ['admin.users.list', 'admin.users.create', 'admin.users.edit']
-    const failed: string[] = []
-    const results: Record<string, { translated: string[]; failed: string[]; samplingUsed: boolean; writeError?: string }> = {}
-    const targetCode = 'es-ES'
-
-    const allTranslations = {
-      'admin.users.list': 'Lista de usuarios',
-      'admin.users.create': 'Crear usuario',
-      'admin.users.edit': 'Editar usuario',
-    }
-
-    try {
-      if (Object.keys(allTranslations).length > 0) {
-        throw new Error('disk full')
-      }
-      results[targetCode] = { translated, failed, samplingUsed: true }
-    } catch (error) {
-      failed.push(...translated)
-      translated.length = 0
-      results[targetCode] = {
-        translated: [],
-        failed: [...Object.keys(keysAndValues)],
-        samplingUsed: true,
-        writeError: error instanceof Error ? error.message : String(error),
-      }
-    }
-
-    expect(results[targetCode].translated).toEqual([])
-    expect(results[targetCode].failed).toEqual(['admin.users.list', 'admin.users.create', 'admin.users.edit'])
-  })
-
-  it('subsequent locales still processed after write error', () => {
-    const results: Record<string, { translated: string[]; failed: string[]; samplingUsed: boolean; writeError?: string }> = {}
-
-    const locales = [
-      { code: 'es-ES', shouldFail: true },
-      { code: 'fr-FR', shouldFail: false },
-    ]
-
-    const keysAndValues = {
-      'admin.users.list': 'Benutzerliste',
-    }
-
-    for (const locale of locales) {
-      const translated: string[] = ['admin.users.list']
-      const failed: string[] = []
-      const allTranslations = { 'admin.users.list': 'translated value' }
-
-      try {
-        if (Object.keys(allTranslations).length > 0) {
-          if (locale.shouldFail) {
-            throw new Error('write failed for ' + locale.code)
-          }
-        }
-        results[locale.code] = { translated, failed, samplingUsed: true }
-      } catch (error) {
-        failed.push(...translated)
-        translated.length = 0
-        results[locale.code] = {
-          translated: [],
-          failed: [...Object.keys(keysAndValues)],
-          samplingUsed: true,
-          writeError: error instanceof Error ? error.message : String(error),
-        }
-        continue
-      }
-    }
-
-    expect(results['es-ES'].writeError).toBe('write failed for es-ES')
-    expect(results['es-ES'].translated).toEqual([])
-    expect(results['es-ES'].failed).toEqual(['admin.users.list'])
-
-    expect(results['fr-FR']).toBeDefined()
-    expect(results['fr-FR'].writeError).toBeUndefined()
-    expect(results['fr-FR'].translated).toEqual(['admin.users.list'])
-    expect(results['fr-FR'].failed).toEqual([])
-  })
-})
-
 // ─── translate_missing: progressTotal computation ────────────────
 
 describe('translate_missing: progressTotal computation', () => {
@@ -786,68 +204,6 @@ describe('translate_missing: progressTotal computation', () => {
     const maxBatch = 50
     const total = computeProgressTotal(missingKeyCounts, maxBatch)
     expect(total).toBe(0)
-  })
-})
-
-// ─── resolveSamplingPreferences ──────────────────────────────────
-
-describe('resolveSamplingPreferences', () => {
-  it('returns built-in defaults when no project config is provided', () => {
-    const result = resolveSamplingPreferences(undefined)
-    expect(result).toEqual(DEFAULT_SAMPLING_PREFERENCES)
-  })
-
-  it('returns built-in defaults when project config has no samplingPreferences', () => {
-    const result = resolveSamplingPreferences({ context: 'some project' })
-    expect(result).toEqual(DEFAULT_SAMPLING_PREFERENCES)
-  })
-
-  it('maps string hints to ModelHint objects', () => {
-    const result = resolveSamplingPreferences({
-      samplingPreferences: { hints: ['sonnet', 'gpt-4o'] },
-    })
-    expect(result.hints).toEqual([{ name: 'sonnet' }, { name: 'gpt-4o' }])
-  })
-
-  it('overrides individual priority fields while keeping defaults for unset fields', () => {
-    const result = resolveSamplingPreferences({
-      samplingPreferences: { intelligencePriority: 0.9 },
-    })
-    expect(result.intelligencePriority).toBe(0.9)
-    expect(result.costPriority).toBe(DEFAULT_SAMPLING_PREFERENCES.costPriority)
-    expect(result.speedPriority).toBe(DEFAULT_SAMPLING_PREFERENCES.speedPriority)
-    expect(result.hints).toEqual(DEFAULT_SAMPLING_PREFERENCES.hints)
-  })
-
-  it('overrides all fields when fully specified', () => {
-    const result = resolveSamplingPreferences({
-      samplingPreferences: {
-        hints: ['claude'],
-        costPriority: 0.1,
-        speedPriority: 0.2,
-        intelligencePriority: 0.95,
-      },
-    })
-    expect(result).toEqual({
-      hints: [{ name: 'claude' }],
-      costPriority: 0.1,
-      speedPriority: 0.2,
-      intelligencePriority: 0.95,
-    })
-  })
-
-  it('falls back to default hints when hints array is undefined', () => {
-    const result = resolveSamplingPreferences({
-      samplingPreferences: { costPriority: 0.5 },
-    })
-    expect(result.hints).toEqual(DEFAULT_SAMPLING_PREFERENCES.hints)
-  })
-
-  it('handles empty hints array', () => {
-    const result = resolveSamplingPreferences({
-      samplingPreferences: { hints: [] },
-    })
-    expect(result.hints).toEqual([])
   })
 })
 
@@ -949,6 +305,40 @@ describe('buildTranslationUserMessage', () => {
 })
 
 describe('extractJsonFromResponse', () => {
+  /**
+   * Captured from a real Gemini response on anny-ui !2070: the correct
+   * translation, complete, missing only its closing brace. The whole response
+   * was thrown away and the key reported as failed — five keys never got
+   * translated across repeated runs because of two absent characters.
+   */
+  const truncatedResponse = '{\n  "pages.organizations.locations.chooseYourLocation": "Roghnaigh do shu\u00edomh"'
+
+  it('recovers a response that ends mid-object', () => {
+    const result = extractJsonFromResponse(truncatedResponse)
+
+    expect(result).toEqual({
+      'pages.organizations.locations.chooseYourLocation': 'Roghnaigh do shuíomh',
+    })
+  })
+
+  it('keeps the pairs that did arrive when the last one is cut mid-value', () => {
+    const result = extractJsonFromResponse('{"a": "first", "b": "second", "c": "thir')
+
+    expect(result).toEqual({ a: 'first', b: 'second' })
+  })
+
+  it('keeps the pairs that did arrive when the cut lands mid-key', () => {
+    const result = extractJsonFromResponse('{"a": "first", "b": "second", "c')
+
+    expect(result).toEqual({ a: 'first', b: 'second' })
+  })
+
+  // Nothing usable arrived: still an error, because inventing an empty object
+  // would report every key as silently omitted rather than as failed.
+  it('still throws when the object was cut before any pair completed', () => {
+    expect(() => extractJsonFromResponse('{"a": "fir')).toThrow(/ended mid-object/)
+  })
+
   it('parses clean JSON directly', () => {
     const result = extractJsonFromResponse('{"key":"value"}')
     expect(result).toEqual({ key: 'value' })
@@ -991,20 +381,9 @@ describe('extractJsonFromResponse', () => {
 })
 
 describe('computeMaxTokens', () => {
-  it('returns 552 for 1 key', () => {
-    expect(computeMaxTokens(1)).toBe(552)
-  })
-
-  it('returns 2512 for 50 keys', () => {
-    expect(computeMaxTokens(50)).toBe(2512)
-  })
-
-  it('returns 8512 for 200 keys', () => {
-    expect(computeMaxTokens(200)).toBe(8512)
-  })
-
-  it('caps at 16384 for very large batches', () => {
-    expect(computeMaxTokens(500)).toBe(16384)
+  it('returns the fixed budget regardless of batch size', () => {
+    expect(computeMaxTokens(1)).toBe(16384)
+    expect(computeMaxTokens(50)).toBe(16384)
     expect(computeMaxTokens(1000)).toBe(16384)
   })
 })

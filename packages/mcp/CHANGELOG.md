@@ -1,5 +1,134 @@
 # Changelog
 
+## [7.5.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-mcp-7.4.1...the-i18n-mcp-7.5.0) (2026-08-23)
+
+
+### Features
+
+* find keys that carry the same value, not just the same path ([#396](https://github.com/fabkho/the-i18n-kit/issues/396)) ([02e60d1](https://github.com/fabkho/the-i18n-kit/commit/02e60d10bce4bda5623ff0d11d924bd1e41127e1))
+* **mcp:** surface the layer graph from discover ([#388](https://github.com/fabkho/the-i18n-kit/issues/388)) ([8753ee3](https://github.com/fabkho/the-i18n-kit/commit/8753ee3f423dcad31fb27c9a80c6e187c0cf5958)), closes [#342](https://github.com/fabkho/the-i18n-kit/issues/342)
+* move a translation key between layers in one operation ([#393](https://github.com/fabkho/the-i18n-kit/issues/393)) ([79a108e](https://github.com/fabkho/the-i18n-kit/commit/79a108ed741da71617db437f9f702bc1f823ffe9)), closes [#341](https://github.com/fabkho/the-i18n-kit/issues/341)
+
+
+### Bug Fixes
+
+* **config:** require a key on every translation example ([#383](https://github.com/fabkho/the-i18n-kit/issues/383)) ([cdc3418](https://github.com/fabkho/the-i18n-kit/commit/cdc341813e98e8c36d36eb814148da80d17d93aa)), closes [#367](https://github.com/fabkho/the-i18n-kit/issues/367)
+* the config surface described nuxt.config.ts policy that [#372](https://github.com/fabkho/the-i18n-kit/issues/372) removed ([#384](https://github.com/fabkho/the-i18n-kit/issues/384)) ([7220e7b](https://github.com/fabkho/the-i18n-kit/commit/7220e7b19b7a3105930ad441df71b435612ce9a1)), closes [#380](https://github.com/fabkho/the-i18n-kit/issues/380) [#300](https://github.com/fabkho/the-i18n-kit/issues/300)
+
+## [7.4.1](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-mcp-7.4.0...the-i18n-mcp-7.4.1) (2026-08-17)
+
+
+### Bug Fixes
+
+* **config:** generate the published JSON Schema from the zod schema ([#346](https://github.com/fabkho/the-i18n-kit/issues/346)) ([#368](https://github.com/fabkho/the-i18n-kit/issues/368)) ([9bfcbc5](https://github.com/fabkho/the-i18n-kit/commit/9bfcbc5f788610dac079855ef0ee6f02746ec0a0))
+
+## [7.4.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-mcp-7.3.0...the-i18n-mcp-7.4.0) (2026-08-16)
+
+
+### Features
+
+* tell users on the old package names that the kit has moved ([#338](https://github.com/fabkho/the-i18n-kit/issues/338)) ([18f146d](https://github.com/fabkho/the-i18n-kit/commit/18f146dfb3fea19102fb97b4ee745b41850aa7aa))
+
+## [7.3.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-mcp-7.2.0...the-i18n-mcp-7.3.0) (2026-08-16)
+
+
+### Features
+
+* **mcp:** expose find_empty_translations ([#335](https://github.com/fabkho/the-i18n-kit/issues/335)) ([34834b8](https://github.com/fabkho/the-i18n-kit/commit/34834b889321594dac818c2eee839002a1e5dc5b)), closes [#252](https://github.com/fabkho/the-i18n-kit/issues/252)
+
+## [7.2.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-mcp-7.1.1...the-i18n-mcp-7.2.0) (2026-08-14)
+
+
+### Features
+
+* **cli:** status — coverage per locale and per layer, with a --fail-under gate ([#311](https://github.com/fabkho/the-i18n-kit/issues/311)) ([8db7c96](https://github.com/fabkho/the-i18n-kit/commit/8db7c96128d79ce6f120fc9745b01e4130e4168d)), closes [#253](https://github.com/fabkho/the-i18n-kit/issues/253)
+
+## [7.1.1](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-mcp-7.1.0...the-i18n-mcp-7.1.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* **cli:** report unresolved and ambiguous locale refs instead of dropping them ([#302](https://github.com/fabkho/the-i18n-kit/issues/302)) ([a257a5f](https://github.com/fabkho/the-i18n-kit/commit/a257a5f9237805f4003efff0a1f84d1868e06a18))
+
+## [7.1.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-mcp-7.0.1...the-i18n-mcp-7.1.0) (2026-08-11)
+
+
+### Features
+
+* **cli:** provider baseUrl via flag, env and project config ([#282](https://github.com/fabkho/the-i18n-kit/issues/282)) ([af5cc9a](https://github.com/fabkho/the-i18n-kit/commit/af5cc9a9d0f9299e630f1ca0b379d2e8576fb672))
+
+## [7.0.1](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-mcp-7.0.0...the-i18n-mcp-7.0.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* **mcp:** default tool projectDir to I18N_PROJECT_DIR ([#279](https://github.com/fabkho/the-i18n-kit/issues/279)) ([16dbcf6](https://github.com/fabkho/the-i18n-kit/commit/16dbcf6acf4563cf4f09a89665773bb3461d09e3)), closes [#264](https://github.com/fabkho/the-i18n-kit/issues/264)
+
+## [7.0.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-mcp-6.2.0...the-i18n-mcp-7.0.0) (2026-08-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* **mcp:** the published package now requires Node.js >= 20 (v2 SDK minimum). Wire behavior toward existing legacy hosts is unchanged.
+
+### Features
+
+* **mcp:** migrate to MCP SDK v2 and serve the 2026-07-28 era alongside legacy ([#260](https://github.com/fabkho/the-i18n-kit/issues/260)) ([b04bad1](https://github.com/fabkho/the-i18n-kit/commit/b04bad1aa15e09b68b697d31ac50f3b689fa822f))
+
+## [6.2.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-mcp-6.1.0...the-i18n-mcp-6.2.0) (2026-08-10)
+
+
+### Features
+
+* **cli:** check — used-but-undefined key detection with CI exit gating ([#245](https://github.com/fabkho/the-i18n-kit/issues/245)) ([6c4b9bf](https://github.com/fabkho/the-i18n-kit/commit/6c4b9bffec124529b415bcbfa1be21af00f715bf))
+* **cli:** find_duplicate_keys — cross-layer key collisions with divergence detection ([#243](https://github.com/fabkho/the-i18n-kit/issues/243)) ([cf2343d](https://github.com/fabkho/the-i18n-kit/commit/cf2343dcc6cd17dcf2400cb234e542c464ab54d7))
+* **cli:** layer-scope-aware orphan scanning with misplaced-usage detection ([#244](https://github.com/fabkho/the-i18n-kit/issues/244)) ([04cc252](https://github.com/fabkho/the-i18n-kit/commit/04cc2521e323cf9b87e131b0fc39320182a731af))
+
+## [6.1.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-mcp-6.0.0...the-i18n-mcp-6.1.0) (2026-08-09)
+
+
+### Features
+
+* **cli:** protectedLocales — human-maintained locales excluded from auto-translation ([#226](https://github.com/fabkho/the-i18n-kit/issues/226)) ([8a9152e](https://github.com/fabkho/the-i18n-kit/commit/8a9152e8b71c911eaae842c563e2672126fa7e47)), closes [#211](https://github.com/fabkho/the-i18n-kit/issues/211)
+
+## [6.0.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-mcp-5.0.0...the-i18n-mcp-6.0.0) (2026-08-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **mcp:** MCP sampling support is removed. Hosts that offered sampling no longer get translation through it — configure provider mode via I18N_PROVIDER, I18N_MODEL, and the provider API key env on the server process, or use agent mode (fallbackContexts + write_translations).
+
+### Features
+
+* **mcp:** env-configured provider mode, MCP sampling removed ([#222](https://github.com/fabkho/the-i18n-kit/issues/222)) ([9bb74d2](https://github.com/fabkho/the-i18n-kit/commit/9bb74d2b3202e90a76b8c6ad4bd83a16a11cfbf2))
+
+## [5.0.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-mcp-4.0.0...the-i18n-mcp-5.0.0) (2026-08-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** translate_missing and translate_key result shapes changed as described. All consumers (CLI output, MCP tools) updated.
+
+### Features
+
+* **cli:** honest translate result contract — mode, failed/skipped reasons, wouldTranslate ([#220](https://github.com/fabkho/the-i18n-kit/issues/220)) ([9d393bb](https://github.com/fabkho/the-i18n-kit/commit/9d393bb025ddfbf4481ac6f5df716366dc550a3e))
+
+## [4.0.0](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-mcp-3.5.1...the-i18n-mcp-4.0.0) (2026-08-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** programmatic API renames — createSamplingFn is now createTranslateFn; translate operations take translateFn instead of samplingFn; Sampling* types are Translate* types. CLI commands and MCP tool surfaces are unaffected.
+
+### Features
+
+* **mcp:** align with MCP 2026-07-28 direction — SDK 1.30, stateless resources ([#217](https://github.com/fabkho/the-i18n-kit/issues/217)) ([fcfa34c](https://github.com/fabkho/the-i18n-kit/commit/fcfa34c8040f16093df9fab501139513bfd67def))
+
+
+### Code Refactoring
+
+* **cli:** rename translate seam SamplingFn → TranslateFn, drop model preferences ([#216](https://github.com/fabkho/the-i18n-kit/issues/216)) ([3355298](https://github.com/fabkho/the-i18n-kit/commit/3355298da6065192e7bcb68ef96ec9a648e41c74))
+
 ## [3.5.1](https://github.com/fabkho/the-i18n-kit/compare/the-i18n-mcp-3.5.0...the-i18n-mcp-3.5.1) (2026-06-16)
 
 

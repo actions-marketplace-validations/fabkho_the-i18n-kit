@@ -1,63 +1,134 @@
 import { createRequire } from 'node:module'
-
-import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server'
+import type { CacheHint } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 
 const require = createRequire(import.meta.url)
-const { version } = require('../package.json') as { version: string }
+const { name: packageName, version } = require('../package.json') as { name: string, version: string }
 
 import {
   detectI18nConfig,
   getCachedConfig,
   readLocaleData,
   ToolError,
+  renameNotice,
   detectConfig,
   listLocaleDirs,
+  serializeLayerGraph,
   getTranslations,
   writeTranslations,
   getMissingTranslations,
+  findEmptyTranslations,
+  getTranslationStatus,
   searchTranslations,
   removeTranslations,
   renameTranslationKey,
+  moveTranslationKey,
   translateMissing,
   translateKey,
   findOrphanKeys,
   removeOrphanKeys,
+  findDuplicateKeys,
+  checkUndefinedKeys,
   scaffoldLocaleFiles,
   listNamespaces,
   findLocaleImpl,
+  resolveProtectedLocales,
   toErrorMessage,
+  createTranslateFn,
+  resolveProviderBaseUrl,
+  loadProjectConfig,
+  BASE_URL_ENV,
 } from 'the-i18n-cli'
 
-import type { SamplingFn, ProgressFn, ProjectConfig } from 'the-i18n-cli'
+import type { TranslateFn, ProgressFn, ProjectConfig, LlmProvider } from 'the-i18n-cli'
 
+// Every tool, resource, and prompt handler must default projectDir to this —
+// falling through to core's own process.cwd() default would ignore
+// I18N_PROJECT_DIR (the documented env contract).
 const DEFAULT_PROJECT_DIR = process.env.I18N_PROJECT_DIR ?? process.cwd()
 
-// ─── Shared helpers ───────────────────────────────────────────────
+// ─── Translation backend (resolved once at startup) ───────────────
 
-function createMcpSamplingFn(server: McpServer, samplingSupported: boolean): SamplingFn | undefined {
-  if (!samplingSupported) return undefined
-  return async (opts) => {
-    const SAMPLING_TIMEOUT_MS = 120_000
-    const result = await server.server.createMessage({
-      messages: [{ role: 'user', content: { type: 'text', text: opts.userMessage } }],
-      systemPrompt: opts.systemPrompt,
-      maxTokens: opts.maxTokens,
-      temperature: 0,
-      includeContext: 'none',
-      modelPreferences: {
-        hints: opts.preferences.hints,
-        costPriority: opts.preferences.costPriority,
-        speedPriority: opts.preferences.speedPriority,
-        intelligencePriority: opts.preferences.intelligencePriority,
-      },
-    }, { timeout: SAMPLING_TIMEOUT_MS })
-    return {
-      text: result.content.type === 'text' ? result.content.text : '',
-      model: result.model,
-    }
+const PROVIDER_KEY_ENVS: Record<LlmProvider, string> = {
+  openai: 'OPENAI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+  google: 'GEMINI_API_KEY',
+}
+
+interface TranslationBackend {
+  mode: 'provider' | 'agent'
+  provider?: LlmProvider
+  model?: string
+  translateFn?: TranslateFn
+}
+
+function isKnownProvider(value: string): value is LlmProvider {
+  return value in PROVIDER_KEY_ENVS
+}
+
+/**
+ * Resolve the translation backend from environment configuration.
+ *
+ * Fully configured (`I18N_PROVIDER`, `I18N_MODEL`, and the provider's API key
+ * env) → provider mode: translate tools call the LLM provider directly.
+ * Nothing configured → agent mode: translate tools return fallback contexts
+ * for the host agent to translate inline and persist via write_translations.
+ * Partial configuration → a startup warning on stderr plus agent mode, so a
+ * misconfigured server never surprises callers per-request.
+ */
+async function resolveTranslationBackend(): Promise<TranslationBackend> {
+  const provider = process.env.I18N_PROVIDER
+  const model = process.env.I18N_MODEL
+
+  if (!provider && !model) return { mode: 'agent' }
+
+  const warn = (message: string) => process.stderr.write(`[the-i18n-mcp] ${message}\n`)
+
+  if (!provider) {
+    warn('Partial provider config: I18N_MODEL is set but I18N_PROVIDER is missing. Running in agent mode.')
+    return { mode: 'agent' }
+  }
+  if (!isKnownProvider(provider)) {
+    warn(`Partial provider config: I18N_PROVIDER="${provider}" is not one of openai | anthropic | google. Running in agent mode.`)
+    return { mode: 'agent' }
+  }
+  if (!model) {
+    warn(`Partial provider config: I18N_PROVIDER=${provider} is set but I18N_MODEL is missing. Running in agent mode.`)
+    return { mode: 'agent' }
+  }
+  const keyEnv = PROVIDER_KEY_ENVS[provider]
+  if (!process.env[keyEnv]) {
+    warn(`Partial provider config: I18N_PROVIDER=${provider} is set but ${keyEnv} is missing. Running in agent mode.`)
+    return { mode: 'agent' }
+  }
+
+  try {
+    const translateFn = await createTranslateFn({ provider, model, baseUrl: await resolveStartupBaseUrl() })
+    return { mode: 'provider', provider, model, translateFn }
+  } catch (error) {
+    warn(`Provider setup failed: ${toErrorMessage(error)}. Running in agent mode.`)
+    return { mode: 'agent' }
   }
 }
+
+/**
+ * Base URL for the startup-resolved backend: I18N_BASE_URL, else the project
+ * config's providerBaseUrl. A missing or unreadable config is not fatal here
+ * — the server still starts, just without an endpoint override.
+ */
+async function resolveStartupBaseUrl(): Promise<string | undefined> {
+  const fromEnv = resolveProviderBaseUrl({ env: process.env[BASE_URL_ENV] })
+  if (fromEnv) return fromEnv
+  try {
+    const projectConfig = await loadProjectConfig(DEFAULT_PROJECT_DIR)
+    return resolveProviderBaseUrl({ config: projectConfig?.providerBaseUrl })
+  } catch {
+    return undefined
+  }
+}
+
+// ─── Shared helpers ───────────────────────────────────────────────
 
 function buildProjectConfigSection(pc: ProjectConfig | undefined): string {
   if (!pc) return ''
@@ -113,22 +184,99 @@ function toolErrorResponse(context: string, error: unknown) {
 }
 
 /**
- * Wrap a plain result object as MCP text content.
+ * The rename notice (#315), or null when running under the new name.
+ *
+ * An editor spawns this server through `npx`, so an install-time deprecation
+ * is printed into a stream nobody reads and the agent using the tools never
+ * learns the package moved. It has to reach the model at runtime instead.
  */
-function jsonContent(data: unknown) {
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
+const RENAME_NOTICE = renameNotice(packageName)
+
+/**
+ * Wrap a plain result object as MCP text content, delivering the rename notice
+ * on the first result this server produces.
+ *
+ * Built per server rather than shared: with the flag at module scope, two
+ * servers in one process race for a single delivery and whichever called
+ * second never announced itself at all.
+ *
+ * Once, not per call. Repeating it would cost context on every response and
+ * teach the model to skip it — the opposite of what a notice is for.
+ */
+function createJsonContent() {
+  let noticeDelivered = false
+
+  return function jsonContent(data: unknown) {
+    let payload = data
+
+    if (RENAME_NOTICE && !noticeDelivered && payload !== null && typeof payload === 'object' && !Array.isArray(payload)) {
+      noticeDelivered = true
+      payload = { ...payload, _notice: RENAME_NOTICE }
+    }
+
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }],
+    }
   }
+}
+
+// Shared input-schema fragments (identical wording across tools).
+const projectDirInput = () => z
+  .string()
+  .optional()
+  .describe('Absolute path to the Nuxt project root. Defaults to I18N_PROJECT_DIR, then server cwd. Example: "/home/user/my-app".')
+
+const outputFileInput = (example: string) => z
+  .string()
+  .optional()
+  .describe(`Absolute path to write full JSON output. Returns only a compact summary to the caller — use this for large outputs to avoid flooding the conversation context. Example: "${example}"`)
+
+// SEP-2549 cache hints for the cacheable 2026-07-28 results.
+const STATIC_SURFACE_CACHE: CacheHint = { ttlMs: 3_600_000, cacheScope: 'private' }
+
+export interface CreateServerOptions {
+  /**
+   * Test-only seam: inject a TranslateFn directly, bypassing environment
+   * resolution. Production callers must leave this unset and configure the
+   * backend via I18N_PROVIDER / I18N_MODEL / the provider's API key env.
+   */
+  translateFn?: TranslateFn
 }
 
 /**
  * Create and configure the MCP server with all tools.
+ *
+ * The translation backend is resolved once here, at startup — see
+ * resolveTranslationBackend for the environment contract.
  */
-export function createServer(): McpServer {
-  const server = new McpServer({
-    name: 'the-i18n-mcp',
-    version,
-  })
+export async function createServer(options: CreateServerOptions = {}): Promise<McpServer> {
+  const backend: TranslationBackend = options.translateFn
+    ? { mode: 'provider', translateFn: options.translateFn }
+    : await resolveTranslationBackend()
+
+  const jsonContent = createJsonContent()
+
+  const server = new McpServer(
+    {
+      name: 'the-i18n-mcp',
+      version,
+    },
+    {
+      ...(RENAME_NOTICE ? { instructions: RENAME_NOTICE } : {}),
+      // 2026-07-28 responses only — legacy-era responses never carry cache
+      // fields. Everything is 'private': locale data is project-local.
+      cacheHints: {
+        // Tool/prompt registrations and the discover advertisement are fixed
+        // for the process lifetime.
+        'tools/list': STATIC_SURFACE_CACHE,
+        'prompts/list': STATIC_SURFACE_CACHE,
+        'server/discover': STATIC_SURFACE_CACHE,
+        // Resources carry no cache hints: the write tools mutate locale
+        // files and clients have no guaranteed invalidation channel, so any
+        // TTL would let an agent read stale data right after its own write.
+      },
+    },
+  )
 
   // ─── Tool: discover ────────────────────────────────────────────
 
@@ -139,24 +287,40 @@ export function createServer(): McpServer {
       description:
         'Discover the complete i18n setup. Returns project config (locales, default locale, layers, '
         + 'fallback chain, glossary, translation style) plus per-layer directory listings with file '
-        + 'counts and top-level key namespaces. Call this first — it warms the config cache that all '
-        + 'other tools depend on.',
-      inputSchema: {
+        + 'counts and top-level key namespaces, and the active translation mode ("provider" when the '
+        + 'server has an env-configured LLM provider, "agent" otherwise). Call this first to '
+        + 'understand the project before reading or writing translations. layerGraph answers where a '
+        + 'new key belongs: a key used by more than one app belongs in a layer those apps share, and '
+        + 'layerGraph.shared names those layers.',
+      inputSchema: z.object({
         projectDir: z
           .string()
           .optional()
-          .describe('Absolute path to the project root. Defaults to server cwd.'),
-      },
+          .describe('Absolute path to the project root. Defaults to I18N_PROJECT_DIR, then server cwd.'),
+      }),
     },
-    async ({ projectDir }) => {
+    async ({ projectDir = DEFAULT_PROJECT_DIR }) => {
       try {
-        // Detect config first (warms cache)
+        // detectConfig first: it warms the config cache listLocaleDirs reuses
         const config = await detectConfig(projectDir)
-        // Then get layer directory info
         const dirs = await listLocaleDirs(projectDir)
         return jsonContent({
           ...config,
+          // Resolved canonical codes of human-maintained locales that the
+          // translate tools exclude from default targets (raw refs live in
+          // projectConfig.protectedLocales).
+          protectedLocales: resolveProtectedLocales(config).map(l => l.code),
           layers: dirs,
+          // The topology behind that flat list: which layers are shared, which
+          // apps consume which layer, and what each alias points at. Without it
+          // an agent placing a key can only guess from layer names, which is
+          // how app-layer keys end up duplicating root keys (#342).
+          layerGraph: serializeLayerGraph(config),
+          // Active translation mode — lets operators verify env configuration
+          // without triggering a translation. Never includes the API key.
+          translationMode: backend.mode,
+          ...(backend.provider ? { translationProvider: backend.provider } : {}),
+          ...(backend.model ? { translationModel: backend.model } : {}),
         })
       } catch (error) {
         return toolErrorResponse('discovering i18n setup', error)
@@ -174,7 +338,7 @@ export function createServer(): McpServer {
         'List the translation key tree grouped by namespace prefix. '
         + 'Returns a hierarchical view of all keys with counts per namespace node. '
         + 'Use this to explore available keys without guessing path prefixes.',
-      inputSchema: {
+      inputSchema: z.object({
         layer: z
           .string()
           .optional()
@@ -186,15 +350,48 @@ export function createServer(): McpServer {
         projectDir: z
           .string()
           .optional()
-          .describe('Absolute path to the project root. Defaults to server cwd. Example: "/home/user/my-app".'),
-      },
+          .describe('Absolute path to the project root. Defaults to I18N_PROJECT_DIR, then server cwd. Example: "/home/user/my-app".'),
+      }),
     },
-    async ({ layer, locale, projectDir }) => {
+    async ({ layer, locale, projectDir = DEFAULT_PROJECT_DIR }) => {
       try {
         const result = await listNamespaces({ layer, locale, projectDir })
         return jsonContent(result)
       } catch (error) {
         return toolErrorResponse('listing namespaces', error)
+      }
+    },
+  )
+
+  // ─── Tool: find_empty_translations ─────────────────────────────
+
+  server.registerTool(
+    'find_empty_translations',
+    {
+      title: 'Find Empty Translations',
+      description:
+        'Find keys whose value is an empty string. '
+        + 'These exist in the locale file, so they are not reported as missing, and they render as nothing in the UI. '
+        + 'Use this after a scaffold or an interrupted translation run to find keys that were created but never filled.',
+      inputSchema: z.object({
+        layer: z
+          .string()
+          .optional()
+          .describe('Layer name to filter by (e.g., "root", "app-admin"). If omitted, checks all layers. Call discover to discover available layers.'),
+        locale: z
+          .string()
+          .optional()
+          .describe('Locale to check (e.g., "de"). If omitted, checks every locale.'),
+        projectDir: projectDirInput(),
+        outputFile: outputFileInput('/tmp/empty-translations.json'),
+      }),
+    },
+    async ({ layer, locale, projectDir = DEFAULT_PROJECT_DIR, outputFile }) => {
+      try {
+        const result = await findEmptyTranslations({ layer, locale, projectDir, outputFile })
+        return jsonContent(result)
+      } catch (error) {
+        return toolErrorResponse('finding empty translations', error)
       }
     },
   )
@@ -207,7 +404,7 @@ export function createServer(): McpServer {
       title: 'Get Translations',
       description:
         'Get translation values for given key paths from a specific locale and layer. Use "*" as locale to read from all locales.',
-      inputSchema: {
+      inputSchema: z.object({
         layer: z
           .string()
           .describe('Layer name from discover (e.g., "root", "app-admin"). Call discover to discover available layers.'),
@@ -224,10 +421,10 @@ export function createServer(): McpServer {
         projectDir: z
           .string()
           .optional()
-          .describe('Absolute path to the Nuxt project root. Defaults to server cwd. Example: "/home/user/my-app".'),
-      },
+          .describe('Absolute path to the Nuxt project root. Defaults to I18N_PROJECT_DIR, then server cwd. Example: "/home/user/my-app".'),
+      }),
     },
-    async ({ layer, locale, keys, compact, projectDir }) => {
+    async ({ layer, locale, keys, compact, projectDir = DEFAULT_PROJECT_DIR }) => {
       try {
         const result = await getTranslations({ layer, locale, keys, compact, projectDir })
         return jsonContent(result)
@@ -249,7 +446,7 @@ export function createServer(): McpServer {
         + 'Mode "add" only creates new keys, skipping existing ones. '
         + 'Mode "update" only modifies existing keys, skipping missing ones. '
         + 'Keys are inserted in alphabetical order. Use dryRun to preview without writing.',
-      inputSchema: {
+      inputSchema: z.object({
         layer: z
           .string()
           .describe('Layer name (e.g., "root", "app-admin"). Discover layers via the discover tool.'),
@@ -273,10 +470,10 @@ export function createServer(): McpServer {
         projectDir: z
           .string()
           .optional()
-          .describe('Absolute path to the Nuxt project root. Defaults to server cwd. Example: "/home/user/my-app".'),
-      },
+          .describe('Absolute path to the Nuxt project root. Defaults to I18N_PROJECT_DIR, then server cwd. Example: "/home/user/my-app".'),
+      }),
     },
-    async ({ layer, translations, mode, dryRun, projectDir }) => {
+    async ({ layer, translations, mode, dryRun, projectDir = DEFAULT_PROJECT_DIR }) => {
       try {
         const result = await writeTranslations({ layer, translations, mode, dryRun, projectDir })
         return jsonContent(result)
@@ -294,7 +491,7 @@ export function createServer(): McpServer {
       title: 'Get Missing Translations',
       description:
         'Find translation keys that exist in the reference locale but are missing in other locales. Scans a specific layer or all layers.',
-      inputSchema: {
+      inputSchema: z.object({
         layer: z
           .string()
           .optional()
@@ -310,19 +507,56 @@ export function createServer(): McpServer {
         projectDir: z
           .string()
           .optional()
-          .describe('Absolute path to the Nuxt project root. Defaults to server cwd. Example: "/home/user/my-app".'),
+          .describe('Absolute path to the Nuxt project root. Defaults to I18N_PROJECT_DIR, then server cwd. Example: "/home/user/my-app".'),
         outputFile: z
           .string()
           .optional()
           .describe('Absolute path to write full JSON output. Returns only a compact summary to the caller — use this for large outputs to avoid flooding the conversation context. Example: "/tmp/missing-translations.json"'),
-      },
+      }),
     },
-    async ({ layer, referenceLocale, targetLocales, projectDir, outputFile }) => {
+    async ({ layer, referenceLocale, targetLocales, projectDir = DEFAULT_PROJECT_DIR, outputFile }) => {
       try {
         const result = await getMissingTranslations({ layer, referenceLocale, targetLocales, projectDir, outputFile })
         return jsonContent(result)
       } catch (error) {
         return toolErrorResponse('finding missing translations', error)
+      }
+    },
+  )
+
+  // ─── Tool: get_translation_status ──────────────────────────────
+
+  server.registerTool(
+    'get_translation_status',
+    {
+      title: 'Get Translation Status',
+      description:
+        'Translation coverage in one call: per-locale and per-layer counts of total, translated, missing and empty keys, plus an overall completion percentage. Use this instead of calling get_missing_translations per layer and counting keys yourself. Empty-string values count as untranslated. Locales listed in protectedLocales are reported but excluded from the overall figure, since they are maintained by hand.',
+      inputSchema: z.object({
+        layer: z
+          .string()
+          .optional()
+          .describe('Layer name to scan (e.g., "root", "app-admin"). If omitted, scans all layers.'),
+        referenceLocale: z
+          .string()
+          .optional()
+          .describe('Locale code used as the source of truth (e.g., "en", "en-US"). Defaults to the project default locale.'),
+        projectDir: z
+          .string()
+          .optional()
+          .describe('Absolute path to the project root. Defaults to I18N_PROJECT_DIR, then server cwd.'),
+        outputFile: z
+          .string()
+          .optional()
+          .describe('Absolute path to write the full per-locale and per-layer breakdown. Returns only the summary to the caller.'),
+      }),
+    },
+    async ({ layer, referenceLocale, projectDir = DEFAULT_PROJECT_DIR, outputFile }) => {
+      try {
+        const result = await getTranslationStatus({ layer, referenceLocale, projectDir, outputFile })
+        return jsonContent(result)
+      } catch (error) {
+        return toolErrorResponse('reading translation status', error)
       }
     },
   )
@@ -335,7 +569,7 @@ export function createServer(): McpServer {
       title: 'Search Translations',
       description:
         'Search translation files by key path or value. Simple case-insensitive substring match — not fuzzy or regex. Useful for finding existing translations before adding duplicates.',
-      inputSchema: {
+      inputSchema: z.object({
         query: z
           .string()
           .describe('Substring to search for. Matched against translation keys and/or string values. Case-insensitive. Example: "save" matches key "common.actions.save" or value "Save changes".'),
@@ -354,14 +588,14 @@ export function createServer(): McpServer {
         projectDir: z
           .string()
           .optional()
-          .describe('Absolute path to the Nuxt project root. Defaults to server cwd. Example: "/home/user/my-app".'),
+          .describe('Absolute path to the Nuxt project root. Defaults to I18N_PROJECT_DIR, then server cwd. Example: "/home/user/my-app".'),
         outputFile: z
           .string()
           .optional()
           .describe('Absolute path to write full JSON output. Returns only a compact summary to the caller — use this for large outputs to avoid flooding the conversation context. Example: "/tmp/search-results.json"'),
-      },
+      }),
     },
-    async ({ query, searchIn, layer, locale, projectDir, outputFile }) => {
+    async ({ query, searchIn, layer, locale, projectDir = DEFAULT_PROJECT_DIR, outputFile }) => {
       try {
         const result = await searchTranslations({ query, searchIn, layer, locale, projectDir, outputFile })
         return jsonContent(result)
@@ -379,7 +613,7 @@ export function createServer(): McpServer {
       title: 'Remove Translations',
       description:
         'Remove one or more translation keys from ALL locale files in the specified layer. Use dryRun to preview changes before applying them.',
-      inputSchema: {
+      inputSchema: z.object({
         layer: z
           .string()
           .describe('Layer name from discover (e.g., "root", "app-admin"). The key will be removed from ALL locale files in this layer.'),
@@ -393,15 +627,61 @@ export function createServer(): McpServer {
         projectDir: z
           .string()
           .optional()
-          .describe('Absolute path to the Nuxt project root. Defaults to server cwd. Example: "/home/user/my-app".'),
-      },
+          .describe('Absolute path to the Nuxt project root. Defaults to I18N_PROJECT_DIR, then server cwd. Example: "/home/user/my-app".'),
+      }),
     },
-    async ({ layer, keys, dryRun, projectDir }) => {
+    async ({ layer, keys, dryRun, projectDir = DEFAULT_PROJECT_DIR }) => {
       try {
         const result = await removeTranslations({ layer, keys, dryRun, projectDir })
         return jsonContent(result)
       } catch (error) {
         return toolErrorResponse('removing translations', error)
+      }
+    },
+  )
+
+  // ─── Tool: move_translation_key ────────────────────────────────
+
+  server.registerTool(
+    'move_translation_key',
+    {
+      title: 'Move Translation Key Between Layers',
+      description:
+        'Move a key from one layer to another, carrying every locale that defines it — promoting an '
+        + 'app-layer key to a shared layer once a second app needs it, or demoting a shared key that '
+        + 'turned out to be app-specific. Call discover first: layerGraph.shared names the layers more '
+        + 'than one app consumes. Writes nothing at all if the target layer already holds the key with '
+        + 'a different value in any locale; if it holds the same value, that locale is deduplicated '
+        + 'instead. Use dryRun to preview the plan.',
+      inputSchema: z.object({
+        fromLayer: z
+          .string()
+          .describe('Layer the key lives in today, from discover. Example: "app-admin".'),
+        toLayer: z
+          .string()
+          .describe('Layer to move it to, from discover. Example: "root". Must differ from fromLayer — to rename within one layer, use rename_translation_key.'),
+        key: z
+          .string()
+          .describe('Dot-separated key path to move. Example: "calendar.views.save".'),
+        newKey: z
+          .string()
+          .optional()
+          .describe('Key path in the target layer, when the move also renames it. Example: "common.actions.save". Defaults to the same path.'),
+        dryRun: z
+          .boolean()
+          .optional()
+          .describe('When true, returns the plan without writing any files. Default: false.'),
+        projectDir: z
+          .string()
+          .optional()
+          .describe('Absolute path to the project root. Defaults to I18N_PROJECT_DIR, then server cwd.'),
+      }),
+    },
+    async ({ fromLayer, toLayer, key, newKey, dryRun, projectDir = DEFAULT_PROJECT_DIR }) => {
+      try {
+        return jsonContent(await moveTranslationKey({ fromLayer, toLayer, key, newKey, dryRun, projectDir }))
+      } catch (error) {
+        return toolErrorResponse('moving translation key', error)
       }
     },
   )
@@ -414,7 +694,7 @@ export function createServer(): McpServer {
       title: 'Rename Translation Key',
       description:
         'Rename/move a translation key across ALL locale files in a layer. Preserves the value in every locale. Use dryRun to preview changes before applying them.',
-      inputSchema: {
+      inputSchema: z.object({
         layer: z
           .string()
           .describe('Layer name from discover (e.g., "root", "app-admin"). The key will be renamed in ALL locale files in this layer.'),
@@ -431,10 +711,10 @@ export function createServer(): McpServer {
         projectDir: z
           .string()
           .optional()
-          .describe('Absolute path to the Nuxt project root. Defaults to server cwd. Example: "/home/user/my-app".'),
-      },
+          .describe('Absolute path to the Nuxt project root. Defaults to I18N_PROJECT_DIR, then server cwd. Example: "/home/user/my-app".'),
+      }),
     },
-    async ({ layer, oldKey, newKey, dryRun, projectDir }) => {
+    async ({ layer, oldKey, newKey, dryRun, projectDir = DEFAULT_PROJECT_DIR }) => {
       try {
         const result = await renameTranslationKey({ layer, oldKey, newKey, dryRun, projectDir })
         return jsonContent(result)
@@ -451,15 +731,16 @@ export function createServer(): McpServer {
     {
       title: 'Translate Missing',
       description:
-        'Find keys missing in target locales and translate them. Uses the host LLM via MCP sampling if available, otherwise returns context for the agent to translate inline. Uses project config (glossary, translation prompt, locale notes, examples) if available. Translates all locales concurrently by default — pass all targetLocales at once.',
+        'Find keys missing in target locales and translate them. Two modes: in provider mode (server env-configured with I18N_PROVIDER, I18N_MODEL, and an API key) the server calls the LLM provider directly and writes the results; in agent mode (no provider configured) it returns per-locale fallbackContexts — translate those inline and persist via write_translations. Check the discover output for the active mode. Uses project config (glossary, translation prompt, locale notes, examples) if available. Translates all locales concurrently by default — pass all targetLocales at once.',
       annotations: {
         title: 'Translate Missing Translations',
         readOnlyHint: false,
       },
-      inputSchema: {
+      inputSchema: z.object({
         layer: z
           .string()
-          .describe('Layer name from discover to translate (e.g., "root", "app-admin"). Call discover to discover available layers.'),
+          .optional()
+          .describe('Layer name from discover to translate (e.g., "root", "app-admin"). Omit to translate every locale-backed layer in one call — the recommended default for layered projects, which returns a result per layer plus an aggregated summary.'),
         referenceLocale: z
           .string()
           .optional()
@@ -475,7 +756,7 @@ export function createServer(): McpServer {
         batchSize: z
           .number()
           .optional()
-          .describe('Max keys per LLM sampling request. Default: 50. Lower values reduce per-batch risk but increase round trips.'),
+          .describe('Max keys per provider request (provider mode only). Default: 50. Lower values reduce per-batch risk but increase round trips.'),
         dryRun: z
           .boolean()
           .optional()
@@ -487,27 +768,21 @@ export function createServer(): McpServer {
         projectDir: z
           .string()
           .optional()
-          .describe('Absolute path to the Nuxt project root. Defaults to server cwd. Example: "/home/user/my-app".'),
-      },
+          .describe('Absolute path to the Nuxt project root. Defaults to I18N_PROJECT_DIR, then server cwd. Example: "/home/user/my-app".'),
+      }),
     },
-    async ({ layer, referenceLocale, targetLocales, keys, batchSize, dryRun, compact, projectDir }, extra) => {
+    async ({ layer, referenceLocale, targetLocales, keys, batchSize, dryRun, compact, projectDir = DEFAULT_PROJECT_DIR }, ctx) => {
       try {
-        // Check sampling support from MCP client capabilities
-        const clientCapabilities = server.server.getClientCapabilities()
-        const samplingSupported = !!clientCapabilities?.sampling
-
-        // Build progressFn from MCP progress notifications.
-        // progressTotal is set by the onProgressTotal callback below, which runs
-        // during the pre-scan phase of translateMissing — before any progress
-        // notifications are sent. This temporal coupling is safe because the core
-        // operation always pre-scans before emitting progress.
-        const progressToken = extra._meta?.progressToken
+        // Invariant: translateMissing invokes onProgressTotal during its
+        // pre-scan, before the first progressFn call — progressTotal is
+        // always set by the time a notification is sent.
+        const progressToken = ctx.mcpReq._meta?.progressToken
         let progressCurrent = 0
         let progressTotal: number | undefined
         const progressFn: ProgressFn = async (message: string) => {
           if (progressToken === undefined) return
           progressCurrent++
-          await extra.sendNotification({
+          await ctx.mcpReq.notify({
             method: 'notifications/progress',
             params: {
               progressToken,
@@ -518,9 +793,6 @@ export function createServer(): McpServer {
           })
         }
 
-        // Build samplingFn from MCP server sampling
-        const samplingFn = createMcpSamplingFn(server, samplingSupported)
-
         const result = await translateMissing({
           layer,
           referenceLocale,
@@ -530,10 +802,25 @@ export function createServer(): McpServer {
           dryRun,
           compact,
           projectDir,
-          samplingFn,
+          translateFn: backend.translateFn,
           progressFn,
           onProgressTotal: (total) => { progressTotal = total },
         })
+
+        // MCP-owned guidance for agent mode. All-layers mode (no `layer`
+        // argument, the default for layered projects since #292) nests the
+        // fallback contexts per layer, so checking only the top level would
+        // skip the guidance in exactly the case an agent is most likely to hit.
+        const hasFallbacks = 'layers' in result
+          ? Object.values(result.layers).some(l => l.fallbackContexts)
+          : Boolean(result.fallbackContexts)
+
+        if (hasFallbacks && result.summary) {
+          (result.summary as Record<string, unknown>).message
+            = 'Agent mode — no provider configured on the server. Use the fallbackContexts to translate '
+            + 'inline, then call write_translations (mode: "upsert") to write the results. To enable '
+            + 'provider mode, set I18N_PROVIDER, I18N_MODEL, and the provider API key env on the server process.'
+        }
 
         return jsonContent(result)
       } catch (error) {
@@ -549,12 +836,12 @@ export function createServer(): McpServer {
     {
       title: 'Translate Key',
       description:
-        'Add/update one source translation key and translate it into target locales. Unlike translate_missing, this can overwrite existing stale target translations.',
+        'Add/update one source translation key and translate it into target locales. Unlike translate_missing, this can overwrite existing stale target translations. Same two modes as translate_missing: provider mode (server env-configured) translates directly; agent mode returns a fallbackContext — translate it inline and persist via write_translations.',
       annotations: {
         title: 'Translate Single Key',
         readOnlyHint: false,
       },
-      inputSchema: {
+      inputSchema: z.object({
         layer: z
           .string()
           .describe('Layer name from discover to update (e.g., "root", "app-admin").'),
@@ -579,7 +866,7 @@ export function createServer(): McpServer {
         dryRun: z
           .boolean()
           .optional()
-          .describe('When true, previews source/target locales without writing files or calling sampling.'),
+          .describe('When true, previews source/target locales without writing files or calling the translation backend.'),
         includePreview: z
           .boolean()
           .optional()
@@ -587,15 +874,11 @@ export function createServer(): McpServer {
         projectDir: z
           .string()
           .optional()
-          .describe('Absolute path to the Nuxt project root. Defaults to server cwd.'),
-      },
+          .describe('Absolute path to the Nuxt project root. Defaults to I18N_PROJECT_DIR, then server cwd.'),
+      }),
     },
-    async ({ layer, key, sourceLocale, sourceValue, targetLocales, overwrite, dryRun, includePreview, projectDir }) => {
+    async ({ layer, key, sourceLocale, sourceValue, targetLocales, overwrite, dryRun, includePreview, projectDir = DEFAULT_PROJECT_DIR }) => {
       try {
-        const clientCapabilities = server.server.getClientCapabilities()
-        const samplingSupported = !!clientCapabilities?.sampling
-        const samplingFn = createMcpSamplingFn(server, samplingSupported)
-
         const result = await translateKey({
           layer,
           key,
@@ -606,8 +889,15 @@ export function createServer(): McpServer {
           dryRun,
           includePreview,
           projectDir,
-          samplingFn,
+          translateFn: backend.translateFn,
         })
+
+        // MCP-owned guidance for agent mode
+        if (result.fallbackContext) {
+          result.message = 'Agent mode — no provider configured on the server. Use the fallbackContext to '
+            + 'translate inline, then call write_translations (mode: "upsert") to write the results. To enable '
+            + 'provider mode, set I18N_PROVIDER, I18N_MODEL, and the provider API key env on the server process.'
+        }
 
         return jsonContent(result)
       } catch (error) {
@@ -625,8 +915,10 @@ export function createServer(): McpServer {
       description:
         'Find translation keys that exist in locale JSON files but are not referenced in any Vue/TS source code. '
         + 'Scans a specific layer or all layers. Reports keys that can potentially be removed. '
-        + 'Also detects dynamic key patterns and uncertain matches.',
-      inputSchema: {
+        + 'Also detects dynamic key patterns and uncertain matches. '
+        + 'Scope-aware: each layer is checked only against code of the apps that consume it (summary.scanScope shows each layer\'s effective scope); '
+        + 'keys referenced only from non-consuming apps are reported separately as misplacedUsages, not orphans.',
+      inputSchema: z.object({
         layer: z
           .string()
           .optional()
@@ -638,7 +930,7 @@ export function createServer(): McpServer {
         scanDirs: z
           .array(z.string())
           .optional()
-          .describe('Absolute paths to directories to scan for source code usage. Defaults to all layer root directories. Example: ["/home/user/my-app/apps/admin"].'),
+          .describe('Absolute paths to directories to scan for source code usage. Overrides scope-aware scanning: all layers are checked globally against these dirs. Example: ["/home/user/my-app/apps/admin"].'),
         excludeDirs: z
           .array(z.string())
           .optional()
@@ -646,19 +938,100 @@ export function createServer(): McpServer {
         projectDir: z
           .string()
           .optional()
-          .describe('Absolute path to the Nuxt project root. Defaults to server cwd. Example: "/home/user/my-app".'),
+          .describe('Absolute path to the Nuxt project root. Defaults to I18N_PROJECT_DIR, then server cwd. Example: "/home/user/my-app".'),
         outputFile: z
           .string()
           .optional()
           .describe('Absolute path to write full JSON output. Returns only a compact summary to the caller — use this for large outputs to avoid flooding the conversation context. Example: "/tmp/orphan-keys.json"'),
-      },
+      }),
     },
-    async ({ layer, locale, scanDirs, excludeDirs, projectDir, outputFile }) => {
+    async ({ layer, locale, scanDirs, excludeDirs, projectDir = DEFAULT_PROJECT_DIR, outputFile }) => {
       try {
         const result = await findOrphanKeys({ layer, locale, scanDirs, excludeDirs, projectDir, outputFile })
         return jsonContent(result)
       } catch (error) {
         return toolErrorResponse('finding orphan keys', error)
+      }
+    },
+  )
+
+  // ─── Tool: find_undefined_keys ────────────────────────────────
+
+  server.registerTool(
+    'find_undefined_keys',
+    {
+      title: 'Find Used-But-Undefined Translation Keys',
+      description:
+        'The inverse of find_orphan_keys: find keys referenced in source code but defined in NO locale file of the '
+        + 'using app\'s consumed layers — the direction that ships raw keys to production. '
+        + 'Scope-aware: each scan unit (app) is checked against the layers it consumes (summary.searchedLayersByApp); '
+        + 'a key defined only in a layer the using app does not consume is still undefined for that app. '
+        + 'Known limitation: extraction is line-based and static — dynamically built keys (template literals, '
+        + 'concatenation) cannot be verified and are reported as uncertainKeys, never as hard findings.',
+      inputSchema: z.object({
+        locale: z
+          .string()
+          .optional()
+          .describe('Reference locale to resolve key definitions in (e.g., "en", "en-US"). Defaults to the project default locale.'),
+        scanDirs: z
+          .array(z.string())
+          .optional()
+          .describe('Absolute paths to directories to scan for source code usage. Overrides scope-aware scanning: every layer counts as resolvable from these dirs. Example: ["/home/user/my-app/apps/admin"].'),
+        excludeDirs: z
+          .array(z.string())
+          .optional()
+          .describe('Directory names to skip when scanning source files. Example: ["storybook", "__tests__", "node_modules"].'),
+        projectDir: projectDirInput(),
+        outputFile: outputFileInput('/tmp/undefined-keys.json'),
+      }),
+    },
+    async ({ locale, scanDirs, excludeDirs, projectDir = DEFAULT_PROJECT_DIR, outputFile }) => {
+      try {
+        const result = await checkUndefinedKeys({ locale, scanDirs, excludeDirs, projectDir, outputFile })
+        return jsonContent(result)
+      } catch (error) {
+        return toolErrorResponse('finding undefined keys', error)
+      }
+    },
+  )
+
+  // ─── Tool: find_duplicate_keys ────────────────────────────────
+
+  server.registerTool(
+    'find_duplicate_keys',
+    {
+      title: 'Find Duplicate Translation Keys Across Layers',
+      description:
+        'Find translation keys defined in BOTH a shared layer and an app layer that consumes it '
+        + '(e.g. the same key in a monorepo root layer and in app-shop). At runtime the app layer\'s '
+        + 'value shadows the shared one — collisions with divergent values are the dangerous case, '
+        + 'because the shared value silently never shows. Compares one reference locale and reports '
+        + 'each collision with both values and a divergent flag. Fix by deleting one side, never by moving.',
+      inputSchema: z.object({
+        locale: z
+          .string()
+          .optional()
+          .describe('Locale code to compare values in (e.g., "de", "en-US"). Defaults to the project default locale.'),
+        projectDir: projectDirInput(),
+        byValue: z
+          .boolean()
+          .optional()
+          .describe('When true, also groups different keys carrying the same value — e.g. common.actions.save and calendar.views.save both "Speichern". Each group says what to do about it: "reuse" (a shared layer already has it — delete the app copies and repoint call sites), "promote" (move one to a shared layer with move_translation_key), or "consolidate" (duplication inside one layer). Default: false.'),
+        minValueLength: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('Shortest value worth grouping when byValue is set. Default: 4 — below it, values like "OK" repeat across unrelated namespaces legitimately.'),
+        outputFile: outputFileInput('/tmp/duplicate-keys.json'),
+      }),
+    },
+    async ({ locale, projectDir = DEFAULT_PROJECT_DIR, outputFile, byValue, minValueLength }) => {
+      try {
+        const result = await findDuplicateKeys({ locale, projectDir, outputFile, byValue, minValueLength })
+        return jsonContent(result)
+      } catch (error) {
+        return toolErrorResponse('finding duplicate keys', error)
       }
     },
   )
@@ -670,8 +1043,10 @@ export function createServer(): McpServer {
     {
       title: 'Remove Orphan Keys',
       description:
-        'Find orphan keys (not referenced in source code) and remove them from all locale files. Always does a dry run first.',
-      inputSchema: {
+        'Find orphan keys (not referenced in source code) and remove them from all locale files. Always does a dry run first. '
+        + 'Scope-aware like find_orphan_keys: each layer is checked against its consuming apps (summary.scanScope), and keys referenced only from '
+        + 'non-consuming apps are reported as misplacedUsages and never removed.',
+      inputSchema: z.object({
         layer: z
           .string()
           .optional()
@@ -683,7 +1058,7 @@ export function createServer(): McpServer {
         scanDirs: z
           .array(z.string())
           .optional()
-          .describe('Absolute paths to directories to scan for source code usage. Defaults to all layer root directories. Example: ["/home/user/my-app/apps/admin"].'),
+          .describe('Absolute paths to directories to scan for source code usage. Overrides scope-aware scanning: all layers are checked globally against these dirs. Example: ["/home/user/my-app/apps/admin"].'),
         excludeDirs: z
           .array(z.string())
           .optional()
@@ -695,14 +1070,14 @@ export function createServer(): McpServer {
         projectDir: z
           .string()
           .optional()
-          .describe('Absolute path to the Nuxt project root. Defaults to server cwd. Example: "/home/user/my-app".'),
+          .describe('Absolute path to the Nuxt project root. Defaults to I18N_PROJECT_DIR, then server cwd. Example: "/home/user/my-app".'),
         outputFile: z
           .string()
           .optional()
           .describe('Absolute path to write full JSON output. Returns only a compact summary to the caller — use this for large outputs to avoid flooding the conversation context. Example: "/tmp/cleanup-unused.json"'),
-      },
+      }),
     },
-    async ({ layer, locale, scanDirs, excludeDirs, dryRun, projectDir, outputFile }) => {
+    async ({ layer, locale, scanDirs, excludeDirs, dryRun, projectDir = DEFAULT_PROJECT_DIR, outputFile }) => {
       try {
         const result = await removeOrphanKeys({ layer, locale, scanDirs, excludeDirs, dryRun, projectDir, outputFile })
         return jsonContent(result)
@@ -720,7 +1095,7 @@ export function createServer(): McpServer {
       title: 'Scaffold Locale',
       description:
         'Create empty locale files for new languages. Copies the key structure from the default locale with all values set to empty strings. Supports both JSON (Nuxt) and PHP (Laravel) formats. Does NOT modify framework config — the agent must add the locale to the framework config before calling this tool.',
-      inputSchema: {
+      inputSchema: z.object({
         locales: z
           .array(z.string())
           .optional()
@@ -736,10 +1111,10 @@ export function createServer(): McpServer {
         projectDir: z
           .string()
           .optional()
-          .describe('Absolute path to the project root. Defaults to server cwd. Example: "/home/user/my-app".'),
-      },
+          .describe('Absolute path to the project root. Defaults to I18N_PROJECT_DIR, then server cwd. Example: "/home/user/my-app".'),
+      }),
     },
-    async ({ locales, layer, dryRun, projectDir }) => {
+    async ({ locales, layer, dryRun, projectDir = DEFAULT_PROJECT_DIR }) => {
       try {
         const result = await scaffoldLocaleFiles({ locales, layer, dryRun, projectDir })
         return jsonContent(result)
@@ -751,11 +1126,14 @@ export function createServer(): McpServer {
 
   // ─── Resources ────────────────────────────────────────────────
 
+  // Resources resolve their own config (cached after first detection) — no
+  // prior discover call required. Cross-call ordering dependencies are
+  // incompatible with the stateless request/response model of MCP 2026-07-28.
   server.registerResource(
     'locale-file',
     new ResourceTemplate('i18n:///{layer}/{locale}', {
       list: async () => {
-        const config = getCachedConfig()
+        const config = getCachedConfig() ?? await detectI18nConfig(DEFAULT_PROJECT_DIR).catch(() => null)
         if (!config) {
           return { resources: [] }
         }
@@ -786,10 +1164,7 @@ export function createServer(): McpServer {
       mimeType: 'application/json',
     },
     async (uri, { layer, locale }) => {
-      const config = getCachedConfig()
-      if (!config) {
-        throw new Error('No i18n config detected yet. Call discover first.')
-      }
+      const config = getCachedConfig() ?? await detectI18nConfig(DEFAULT_PROJECT_DIR)
       const localeDef = findLocaleImpl(config, locale as string)
       if (!localeDef) {
         throw new Error(`Locale not found: ${locale}`)
@@ -814,11 +1189,11 @@ export function createServer(): McpServer {
     {
       title: 'Add Feature Translations',
       description: 'Guided workflow for adding i18n translations when building a new feature.',
-      argsSchema: {
+      argsSchema: z.object({
         layer: z.string().optional().describe('Target layer (e.g., "root", "app-admin"). If omitted, uses layerRules from project config.'),
         namespace: z.string().optional().describe('Key namespace for the feature (e.g., "admin.users", "common.actions")'),
-        projectDir: z.string().optional().describe('Absolute path to the Nuxt project root. Defaults to server cwd.'),
-      },
+        projectDir: z.string().optional().describe('Absolute path to the Nuxt project root. Defaults to I18N_PROJECT_DIR, then server cwd.'),
+      }),
     },
     async ({ layer, namespace, projectDir }) => {
       const dir = projectDir ?? DEFAULT_PROJECT_DIR
@@ -847,7 +1222,9 @@ Follow these steps:
    - Follow the glossary and style examples if provided above.
    - Preserve all {placeholders} and @:linked.references.
 4. If you only provided translations for some locales, call \`translate_missing\` to fill in the rest.
-   - Pass \`keys\` explicitly (the exact dot-path keys you just added) to skip the missing-key scan and go straight to sampling.
+   - Pass \`keys\` explicitly (the exact dot-path keys you just added) to skip the missing-key scan.
+   - In provider mode (server env-configured with a provider), it translates and writes directly.
+   - In agent mode, it returns fallbackContexts — translate them inline, then persist via \`write_translations\`.
 5. Summarize what was added.`
 
       return {
@@ -866,10 +1243,10 @@ Follow these steps:
     {
       title: 'Add Language',
       description: 'Add a new language to the project: update framework config, scaffold empty locale files, then translate all keys.',
-      argsSchema: {
+      argsSchema: z.object({
         language: z.string().describe('Language to add (e.g., "Swedish", "sv", "sv-SE")'),
-        projectDir: z.string().optional().describe('Absolute path to the project root. Defaults to server cwd.'),
-      },
+        projectDir: z.string().optional().describe('Absolute path to the project root. Defaults to I18N_PROJECT_DIR, then server cwd.'),
+      }),
     },
     async ({ language, projectDir }) => {
       const dir = projectDir ?? DEFAULT_PROJECT_DIR
@@ -895,8 +1272,9 @@ Follow these steps:
    - **Nuxt**: Add the locale entry to \`i18n.locales\` in \`nuxt.config.ts\` (code, language, file).
    - **Laravel**: Add the locale code to the \`available_locales\` array in \`config/app.php\`.
 2. Call \`scaffold_locale\` with the new locale code to create empty locale files in all layers.
-3. Call \`translate_missing\` for each layer to auto-translate all keys from the default locale. Concurrency is handled internally — each layer call is independent and can run in parallel.
-   - If auto-translation is unavailable, use \`get_translations\` to read the default locale, translate the keys yourself, then call \`write_translations\` with mode: 'update'.
+3. Call \`translate_missing\` for each layer to translate all keys from the default locale. Concurrency is handled internally — each layer call is independent and can run in parallel.
+   - In provider mode (server env-configured with a provider), it translates and writes directly.
+   - In agent mode, it returns fallbackContexts — translate them inline, then call \`write_translations\` with mode: 'update'.
 4. Call \`get_missing_translations\` to verify the new locale has zero missing keys in every layer.
 5. Report a summary: locale code added, files created, keys translated per layer.`
 

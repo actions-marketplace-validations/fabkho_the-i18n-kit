@@ -4,8 +4,10 @@ import { join } from 'node:path'
 import type { FrameworkAdapter, LocaleFileFormat } from '../types'
 import type { I18nConfig, LocaleDefinition } from '../../config/types'
 import { loadProjectConfig } from '../../config/project-config'
+import { readNextI18n } from '../../config/framework/next'
 import { applyLocaleOverride } from '../../config/locale-override'
 import { ConfigError } from '../../utils/errors'
+import { loadPackageJson, collectDependencies, hasNuxtConfig, noLocaleDirError, buildSingleDirConfig } from '../shared'
 
 const COMMON_LOCALE_DIRS = [
   'messages',
@@ -50,55 +52,35 @@ export class ReactAdapter implements FrameworkAdapter {
 
     const localeDir = await findLocaleDir(projectDir)
     if (!localeDir) {
-      throw new ConfigError(
-        `No locale directory found in ${projectDir}. `
-        + 'Looked in: ' + COMMON_LOCALE_DIRS.join(', ') + '. '
-        + 'Configure a .i18n-mcp.json with localeDirs for custom paths.',
-      )
+      throw noLocaleDirError(projectDir, COMMON_LOCALE_DIRS)
     }
 
     const locales = await discoverLocales(localeDir)
-    if (locales.length === 0) {
+    const [firstLocale] = locales
+    if (firstLocale === undefined) {
       throw new ConfigError(
         `No locale files found in ${localeDir}. `
         + 'Make sure your React/Next.js project has locale directories like messages/en/ or locale JSON files.',
       )
     }
 
-    const defaultLocale = locales[0].code
-    const fallbackLocale = { default: [defaultLocale] }
+    // Declared first, then what the project already tells next-intl or Next
+    // itself, and only then directory order — which is not a statement about
+    // the default locale at all, merely the alphabet (#296).
+    const framework = await readNextI18n(projectDir)
+    const defaultLocale = projectConfig?.defaultLocale ?? framework?.defaultLocale ?? firstLocale.code
 
-    return {
-      rootDir: projectDir,
+    return buildSingleDirConfig({
+      projectDir,
+      localeDir,
       defaultLocale,
-      fallbackLocale,
       locales: applyLocaleOverride(locales, projectConfig?.locales),
-      localeDirs: [{ path: localeDir, layer: 'root', layerRootDir: projectDir }],
-      layerRootDirs: [projectDir],
-      projectConfig: projectConfig ?? undefined,
-      apps: [{ name: 'default', rootDir: projectDir, layers: ['root'] }],
-    }
+      projectConfig,
+    })
   }
 }
 
 // ─── Detection helpers ──────────────────────────────────────────
-
-async function loadPackageJson(projectDir: string): Promise<Record<string, unknown> | null> {
-  try {
-    const raw = await readFile(join(projectDir, 'package.json'), 'utf-8')
-    return JSON.parse(raw) as Record<string, unknown>
-  }
-  catch {
-    return null
-  }
-}
-
-function collectDependencies(pkg: Record<string, unknown>): Record<string, unknown> {
-  return {
-    ...(pkg.dependencies ?? {}) as Record<string, unknown>,
-    ...(pkg.devDependencies ?? {}) as Record<string, unknown>,
-  }
-}
 
 function isConflictingFramework(projectDir: string, deps: Record<string, unknown>): boolean {
   for (const indicator of NUXT_INDICATORS) {
@@ -140,10 +122,6 @@ async function computeScore(
 }
 
 // ─── Resolution helpers ─────────────────────────────────────────
-
-function hasNuxtConfig(dir: string): boolean {
-  return ['nuxt.config.ts', 'nuxt.config.js', 'nuxt.config.mjs'].some(f => existsSync(join(dir, f)))
-}
 
 async function findLocaleDir(projectDir: string): Promise<string | null> {
   const fromConfig = await tryNextConfig(projectDir)
@@ -213,9 +191,10 @@ async function tryExtractFromNextConfig(
 
 function tryExtractPathFromConfig(projectDir: string, content: string): string | null {
   const pathMatch = content.match(/(?:messages|localeDir|locales)\s*:\s*['"]([^'"]+)/)
-  if (!pathMatch) return null
+  const rawPath = pathMatch?.[1]
+  if (!rawPath) return null
 
-  const path = pathMatch[1].replace(/\/\*\/\*$/, '').replace(/\/\*$/, '')
+  const path = rawPath.replace(/\/\*\/\*$/, '').replace(/\/\*$/, '')
   return existsSync(join(projectDir, path)) ? join(projectDir, path) : null
 }
 
@@ -237,17 +216,22 @@ async function discoverLocales(localeDir: string): Promise<LocaleDefinition[]> {
     if (isLocaleSubdir(fullPath)) localeCodes.add(entry)
   }
 
-  if (localeCodes.size === 0) {
-    // Flat JSON layout: locales/en.json
-    for (const entry of entries) {
-      if (entry.endsWith('.json')) {
-        localeCodes.add(entry.replace(/\.json$/, ''))
-      }
-    }
+  if (localeCodes.size > 0) {
+    return [...localeCodes].sort().map(code => ({
+      code,
+      language: code,
+    }))
   }
 
-  return [...localeCodes].sort().map(code => ({
-    code,
-    language: code,
-  }))
+  // Flat JSON layout: locales/en.json — `file` is required here, otherwise
+  // resolveLocaleEntries cannot resolve flat entries and every read/write
+  // becomes a silent no-op (#194).
+  return entries
+    .filter(entry => entry.endsWith('.json'))
+    .sort()
+    .map(file => ({
+      code: file.replace(/\.json$/, ''),
+      language: file.replace(/\.json$/, ''),
+      file,
+    }))
 }

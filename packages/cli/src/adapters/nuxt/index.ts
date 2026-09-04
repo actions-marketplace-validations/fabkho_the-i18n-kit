@@ -7,9 +7,12 @@ import { findNuxtConfig, discoverNuxtApps, deriveLayerName } from '../../config/
 import { loadKit } from '../../config/nuxt-loader'
 import { loadProjectConfig } from '../../config/project-config'
 import { applyLocaleOverride } from '../../config/locale-override'
+import { normalizeFallbackLocale } from '../../config/fallback-locale'
+import { artifactToConfig, readArtifact } from '../../config/artifact'
 import { log } from '../../utils/logger'
 import { ConfigError, toErrorMessage } from '../../utils/errors'
-import { resolveLayerOwnership } from './layer-dedup'
+import { claimLocaleDir } from './layer-dedup'
+import { AppMerger } from './merge-apps'
 
 export class NuxtAdapter implements FrameworkAdapter {
   readonly name = 'nuxt'
@@ -50,12 +53,14 @@ export class NuxtAdapter implements FrameworkAdapter {
       )
     }
 
-    if (appDirs.length === 1) {
-      const config = await loadSingleApp(appDirs[0], projectDir)
-      if (appDirs[0] !== projectDir) {
+    const [soleAppDir] = appDirs
+    if (appDirs.length === 1 && soleAppDir !== undefined) {
+      const config = await loadApp(soleAppDir, projectDir)
+      if (soleAppDir !== projectDir) {
         config.rootDir = projectDir
-        if (config.apps.length > 0) {
-          config.apps[0].rootDir = projectDir
+        const rootApp = config.apps[0]
+        if (rootApp) {
+          rootApp.rootDir = projectDir
         }
       }
       log.info(`Detected ${config.locales.length} locales, ${config.localeDirs.length} locale directories`)
@@ -67,6 +72,31 @@ export class NuxtAdapter implements FrameworkAdapter {
     log.info(`Detected ${config.locales.length} locales, ${config.localeDirs.length} locale directories from ${appDirs.length} app(s)`)
     return config
   }
+}
+
+/**
+ * One app's config, preferring what @the-i18n-kit/nuxt published from inside
+ * the build over reconstructing it from outside. The artifact is additive: any
+ * reason not to trust it falls through to loading the app exactly as before,
+ * so a project without the module — or with a stale one — behaves as it always
+ * has.
+ */
+async function loadApp(appDir: string, discoveryRoot: string): Promise<I18nConfig> {
+  const artifact = await readArtifact(appDir)
+  if (!artifact) return loadSingleApp(appDir, discoveryRoot)
+
+  const config = await artifactToConfig(artifact, appDir, discoveryRoot, await loadProjectConfig(discoveryRoot))
+
+  // An artifact describing no locale directory leaves nothing to read, which
+  // the fallback path reports as a ConfigError naming what is missing. Silently
+  // returning an empty config instead would make installing the module turn a
+  // clear error into no output at all.
+  if (config.localeDirs.length === 0) {
+    log.warn(`The artifact for ${appDir} describes no locale directories — loading the app instead.`)
+    return loadSingleApp(appDir, discoveryRoot)
+  }
+
+  return config
 }
 
 async function loadSingleApp(appDir: string, discoveryRoot: string): Promise<I18nConfig> {
@@ -114,115 +144,37 @@ async function loadSingleApp(appDir: string, discoveryRoot: string): Promise<I18
 
 async function loadAndMergeApps(appDirs: string[], discoveryRoot: string): Promise<I18nConfig> {
   const projectConfig = await loadProjectConfig(discoveryRoot)
-
-  const allLocaleDirs: LocaleDir[] = []
-  const allLocales: LocaleDefinition[] = []
-  const allLayerRootDirs: string[] = []
-  const allApps: AppInfo[] = []
-  const seenLocalePaths = new Map<string, { layer: string, layerRootDir: string }>()
-  const seenLocaleCodes = new Set<string>()
-  const usedLayerNames = new Set<string>()
-  let defaultLocale = 'en'
-  let fallbackLocale: Record<string, string[]> = { default: ['en'] }
+  const merger = new AppMerger()
 
   for (const appDir of appDirs) {
     log.info(`Loading Nuxt app: ${relative(discoveryRoot, appDir) || '.'}`)
+
     let appConfig: I18nConfig
     try {
-      appConfig = await loadSingleApp(appDir, discoveryRoot)
+      appConfig = await loadApp(appDir, discoveryRoot)
     }
     catch (error) {
+      // One unloadable app must not take the others with it: a monorepo where
+      // a single app fails to build still has translations worth managing.
       log.warn(`Failed to load app at ${appDir}: ${toErrorMessage(error)}`)
       continue
     }
 
-    if (allLocaleDirs.length === 0) {
-      defaultLocale = appConfig.defaultLocale
-      fallbackLocale = appConfig.fallbackLocale
-    }
-
-    const layerNameRemap = new Map<string, string>()
-
-    for (const dir of appConfig.localeDirs) {
-      const realPath = await realpath(dir.path).catch(() => dir.path)
-      const existing = seenLocalePaths.get(realPath)
-      if (existing) {
-        const { owner, alias } = resolveLayerOwnership(
-          { layer: existing.layer, layerRootDir: existing.layerRootDir },
-          { layer: dir.layer, layerRootDir: dir.layerRootDir },
-          realPath,
-        )
-        if (owner !== existing.layer) {
-          const ownerIndex = allLocaleDirs.findIndex(d => d.layer === existing.layer && !d.aliasOf)
-          if (ownerIndex !== -1) {
-            const prev = allLocaleDirs[ownerIndex]
-            allLocaleDirs[ownerIndex] = { ...dir, layer: owner === dir.layer ? dir.layer : owner }
-            allLocaleDirs.push({ ...prev, aliasOf: owner === dir.layer ? dir.layer : owner })
-            seenLocalePaths.set(realPath, { layer: allLocaleDirs[ownerIndex].layer, layerRootDir: allLocaleDirs[ownerIndex].layerRootDir })
-            log.debug(`Layer '${alias}' is alias of '${owner}' (ancestor-based ownership, same path: ${dir.path})`)
-          }
-        }
-        else {
-          if (dir.layer !== existing.layer) {
-            allLocaleDirs.push({
-              ...dir,
-              layer: alias === dir.layer ? dir.layer : alias,
-              aliasOf: owner,
-            })
-            log.debug(`Layer '${alias}' is alias of '${owner}' (same path: ${dir.path})`)
-          }
-        }
-        continue
-      }
-
-      let layerName = dir.layer
-      if (usedLayerNames.has(layerName)) {
-        layerName = deriveLayerName(dir.layerRootDir, discoveryRoot, usedLayerNames)
-      }
-      if (layerName !== dir.layer) {
-        layerNameRemap.set(dir.layer, layerName)
-      }
-      usedLayerNames.add(layerName)
-      seenLocalePaths.set(realPath, { layer: layerName, layerRootDir: dir.layerRootDir })
-      allLocaleDirs.push({ ...dir, layer: layerName })
-    }
-
-    for (const locale of appConfig.locales) {
-      if (!seenLocaleCodes.has(locale.code)) {
-        seenLocaleCodes.add(locale.code)
-        allLocales.push(locale)
-      }
-    }
-
-    for (const rootDir of appConfig.layerRootDirs) {
-      if (!allLayerRootDirs.includes(rootDir)) {
-        allLayerRootDirs.push(rootDir)
-      }
-    }
-
-    for (const appInfo of appConfig.apps) {
-      const remappedLayers = appInfo.layers.map(name => layerNameRemap.get(name) ?? name)
-      allApps.push({ ...appInfo, layers: remappedLayers })
-    }
+    await merger.add(appConfig, discoveryRoot)
   }
 
-  if (allLocaleDirs.length === 0) {
+  if (merger.localeDirs.length === 0) {
     throw new ConfigError(
       `No locale directories found in any Nuxt app under ${discoveryRoot}. `
       + 'Make sure your Nuxt apps have i18n/locales/ directories with JSON files.',
     )
   }
 
-  return {
-    rootDir: discoveryRoot,
-    defaultLocale,
-    fallbackLocale,
-    locales: applyLocaleOverride(allLocales, projectConfig?.locales),
-    localeDirs: allLocaleDirs,
-    layerRootDirs: allLayerRootDirs,
-    projectConfig: projectConfig ?? undefined,
-    apps: allApps,
-  }
+  return merger.toConfig(
+    discoveryRoot,
+    projectConfig ?? undefined,
+    applyLocaleOverride(merger.locales, projectConfig?.locales),
+  )
 }
 
 async function extractI18nConfig(
@@ -267,7 +219,7 @@ async function extractI18nConfig(
     )
   }
 
-  const fallbackLocale = extractFallbackLocale(i18nOptions)
+  const fallbackLocale = normalizeFallbackLocale(i18nOptions.fallbackLocale, defaultLocale)
   const localeDirs = await discoverLocaleDirs(layers, i18nOptions, discoveryRoot)
 
   const layerRootDirs = [...new Set(layers.map(l => l.config.rootDir))]
@@ -290,36 +242,6 @@ async function extractI18nConfig(
     projectConfig: projectConfig ?? undefined,
     apps: [appInfo],
   }
-}
-
-function extractFallbackLocale(
-  i18nOptions: Record<string, unknown>,
-): Record<string, string[]> {
-  const fallback = i18nOptions.fallbackLocale
-
-  if (typeof fallback === 'string') {
-    return { default: [fallback] }
-  }
-
-  if (Array.isArray(fallback)) {
-    return { default: (fallback as unknown[]).map(String) }
-  }
-
-  if (fallback && typeof fallback === 'object') {
-    const result: Record<string, string[]> = {}
-    for (const [key, value] of Object.entries(fallback as Record<string, unknown>)) {
-      if (Array.isArray(value)) {
-        result[key] = value.map(String)
-      }
-      else if (typeof value === 'string') {
-        result[key] = [value]
-      }
-    }
-    return result
-  }
-
-  const defaultLocale = (i18nOptions.defaultLocale as string) ?? 'en'
-  return { default: [defaultLocale] }
 }
 
 async function discoverLocaleDirs(
@@ -347,54 +269,18 @@ async function discoverLocaleDirs(
     }
 
     const realDir = await realpath(resolvedDir).catch(() => resolvedDir)
-    const existing = resolvedPaths.get(realDir)
-    if (existing) {
-      const { owner, alias } = resolveLayerOwnership(
-        { layer: existing.layer, layerRootDir: existing.layerRootDir },
-        { layer: layerName, layerRootDir },
-        realDir,
-      )
-      if (owner !== existing.layer) {
-        const ownerIndex = dirs.findIndex(d => d.layer === existing.layer && !d.aliasOf)
-        if (ownerIndex !== -1) {
-          const prev = dirs[ownerIndex]
-          dirs[ownerIndex] = {
-            path: resolvedDir,
-            layer: layerName,
-            layerRootDir,
-          }
-          dirs.push({ ...prev, aliasOf: layerName })
-          resolvedPaths.set(realDir, { layer: layerName, layerRootDir })
-          log.debug(`Layer '${alias}' is alias of '${owner}' (ancestor-based ownership)`)
-        }
+
+    if (!resolvedPaths.has(realDir)) {
+      const files = await readdir(resolvedDir)
+      const jsonFiles = files.filter(f => f.endsWith('.json'))
+      if (jsonFiles.length === 0) {
+        log.debug(`No JSON files in locale dir for layer '${layerName}': ${resolvedDir}`)
+        continue
       }
-      else {
-        dirs.push({
-          path: resolvedDir,
-          layer: layerName,
-          layerRootDir,
-          aliasOf: existing.layer,
-        })
-        log.debug(`Layer '${alias}' is alias of '${owner}'`)
-      }
-      continue
+      log.debug(`Found locale dir for layer '${layerName}': ${resolvedDir} (${jsonFiles.length} files)`)
     }
 
-    const files = await readdir(resolvedDir)
-    const jsonFiles = files.filter(f => f.endsWith('.json'))
-    if (jsonFiles.length === 0) {
-      log.debug(`No JSON files in locale dir for layer '${layerName}': ${resolvedDir}`)
-      continue
-    }
-
-    resolvedPaths.set(realDir, { layer: layerName, layerRootDir })
-    dirs.push({
-      path: resolvedDir,
-      layer: layerName,
-      layerRootDir,
-    })
-
-    log.debug(`Found locale dir for layer '${layerName}': ${resolvedDir} (${jsonFiles.length} files)`)
+    claimLocaleDir(dirs, resolvedPaths, { path: resolvedDir, layer: layerName, layerRootDir }, realDir)
   }
 
   if (dirs.length === 0) {

@@ -1,125 +1,100 @@
-# the-i18n-cli
+# @the-i18n-kit/cli
 
-[![npm version](https://img.shields.io/npm/v/the-i18n-cli?style=flat&colorA=18181b&colorB=4fc08d)](https://npmjs.com/package/the-i18n-cli)
+[![npm version](https://img.shields.io/npm/v/@the-i18n-kit/cli?style=flat&colorA=18181b&colorB=4fc08d)](https://npmjs.com/package/@the-i18n-kit/cli)
 [![License](https://img.shields.io/npm/l/the-i18n-cli?style=flat&colorA=18181b&colorB=4fc08d)](https://github.com/fabkho/the-i18n-kit/blob/main/LICENSE)
 
-CLI and core library for managing i18n translation files — supports Nuxt, Laravel, and any project with JSON or PHP locale files.
+Find missing translation keys, remove dead ones, and rename across every locale
+and layer at once. Supports Nuxt, Laravel, Vue, React/Next.js, and any project
+with JSON or PHP locale files.
 
-Read, write, search, rename, and remove translation keys across all locales and layers from your terminal. Auto-detects your framework, discovers monorepo structures, and handles the file I/O.
+Part of [the-i18n-kit](https://github.com/fabkho/the-i18n-kit).
 
-Part of [the-i18n-kit](https://github.com/fabkho/the-i18n-kit) monorepo. For MCP server usage, see [the-i18n-mcp](https://www.npmjs.com/package/the-i18n-mcp).
+### 📖 [Documentation](https://fabkho.github.io/the-i18n-kit/)
 
 ## Install
 
 ```bash
-# Global install
-npm install -g the-i18n-cli
-
-# Or use directly with npx
-npx the-i18n-cli --help
+npm install -g @the-i18n-kit/cli
 ```
+
+The binary is `the-i18n-cli`, whatever the package is called.
 
 ## Quick Start
 
 ```bash
-the-i18n-cli detect                          # Auto-detect project config
-the-i18n-cli missing                         # Find missing translations
-the-i18n-cli search --query "save"           # Search keys and values
-the-i18n-cli add --layer root --translations '{"common.btn.ok": {"en": "OK", "de": "OK"}}'
-the-i18n-cli translate-key --layer root --key common.btn.save --sourceLocale en-US --sourceValue "Save"
-the-i18n-cli cleanup                         # Find orphan keys (dry-run by default)
+the-i18n-cli init                    # write a config from what it detects
+the-i18n-cli status                  # coverage per locale and per layer
+the-i18n-cli missing                 # what is not translated yet
+the-i18n-cli check                   # keys used in code but defined nowhere
+the-i18n-cli remove-orphans          # keys defined but unused (previews by default)
 ```
 
-## Commands
+→ [Cold start guide](https://fabkho.github.io/the-i18n-kit/getting-started/cold-start) ·
+[every command and flag](https://fabkho.github.io/the-i18n-kit/reference/cli) ·
+[the library API](https://fabkho.github.io/the-i18n-kit/reference/programmatic-api)
 
-| Command | Description |
-|---------|-------------|
-| `detect` | Auto-detect i18n configuration |
-| `list-dirs` | List locale directories by layer |
-| `get` | Read translation values |
-| `add` | Add new translation keys |
-| `update` | Update existing keys |
-| `missing` | Find keys missing in target locales |
-| `empty` | Find keys with empty values |
-| `search` | Search keys and values |
-| `remove` | Remove keys from all locales |
-| `rename` | Rename/move a key |
-| `translate` | Get translation contexts for missing keys |
-| `translate-key` | Translate one source key into target locales |
-| `orphans` | Find keys not referenced in source code |
-| `scan` | Find where keys are used in code |
-| `cleanup` | Remove unused keys (dry-run by default) |
-| `scaffold` | Create empty locale files for new languages |
+## Documentation
 
-Run `the-i18n-cli <command> --help` for per-command options.
+| | |
+|---|---|
+| [Commands](https://fabkho.github.io/the-i18n-kit/reference/cli) | Generated from the command definitions |
+| [Configuration](https://fabkho.github.io/the-i18n-kit/configuration/where-config-lives) | Where it lives, precedence, [every field](https://fabkho.github.io/the-i18n-kit/configuration/reference) |
+| [Frameworks](https://fabkho.github.io/the-i18n-kit/frameworks/detection) | How detection works, and what each adapter reads |
+| [Monorepos and layers](https://fabkho.github.io/the-i18n-kit/monorepos/layers) | Why usage in one app does not protect a key in another |
+| [Referring to locales](https://fabkho.github.io/the-i18n-kit/configuration/locale-refs) | Codes, language tags, and why the code is the one to use |
+| [CI/CD](https://fabkho.github.io/the-i18n-kit/ci-cd/github-actions) | The Action and the GitLab template |
 
-### Common Flags
+| [Translation modes](https://fabkho.github.io/the-i18n-kit/concepts/translation-modes) | Provider and agent mode, the result contract, what is validated before writing |
 
-| Flag | Description |
-|------|-------------|
-| `-d, --projectDir <dir>` | Project directory (default: cwd) |
-| `--json` | Output as JSON (default when piped) |
-| `--dryRun` | Preview changes without writing |
+The section below has not moved to the site yet. It is the deepest material
+here, and it is being rewritten against the new extraction architecture — see
+[#358](https://github.com/fabkho/the-i18n-kit/issues/358).
 
-## Supported Frameworks
 
-| Framework | Locale Format | Auto-Detection |
-|-----------|--------------|----------------|
-| **Nuxt** (v3+) | JSON | `nuxt.config.ts` with `@nuxtjs/i18n` |
-| **Laravel** (9+) | PHP arrays | `artisan`, `composer.json`, `lang/` |
-| **Generic** | JSON or PHP | `localeDirs` + `defaultLocale` in `.i18n-mcp.json` |
+## How Orphan Detection Works
 
-For projects that aren't Nuxt or Laravel, add a `.i18n-mcp.json`:
+`remove-orphans` and `check` share a line-based static scanner. Knowing exactly what it can and cannot see is essential before deleting keys.
 
-```json
-{
-  "defaultLocale": "en",
-  "localeDirs": ["src/locales"]
-}
-```
+**Usage evidence the scanner recognizes:**
 
-## Programmatic API
+| Class | Example | Effect |
+|---|---|---|
+| Static keys | `t('a.b.c')`, `$te('a.b')`, `__('a.b')` | exact match |
+| Template patterns | `` t(`a.b.${x}`) `` | keys matching `a.b.<one segment>` count as used (`dynamic-matched`) |
+| Same-file const prefixes | `const base = 'a.b'` + `` t(`${base}.title`) `` | resolved to the exact key |
+| Unresolved variable segments | `` t(`${somePath}.title`) `` | conservatively matches **any** `*.title` key |
+| Concat prefixes | `'a.b.' + x`, `x + '.label'` | pattern-matched like templates (single-segment prefixes included) |
+| Multiline calls | prefix on a different line than `t(` | caught by bare-string fallbacks (heuristic) |
+| Multi-app scoping | key in a shared layer | usage counts only from apps that consume the layer; cross-app usages are reported as `misplacedUsages`, never removed |
 
-The CLI also exports all operations as a library for use in other tools:
+**The scan never removes a key it is unsure about.** Dynamic references are detected, not ignored: a key that *could* be produced by a template pattern, a concatenated prefix or an ambiguous probe is classified as used and left alone. Deletion is reserved for keys with no evidence of use anywhere in a consuming app. On a real 8,000-key project roughly 12% of keys land in the protective buckets — that is the scan working, not failing.
+
+**Classification buckets** — only `orphanKeys` is ever removed; everything else is protective:
+
+- `orphanKeys` — no evidence of use in any consuming app: safe to remove
+- `dynamic-matched` — a dynamic pattern could produce this key: counted as used
+- `uncertainKeys` — evidence is ambiguous (e.g. `$te`-only probes): never removed
+- `ignored` — matched by `orphanScan.ignorePatterns`: never scanned
+- `misplacedUsages` — used only from non-consuming apps: never removed
+
+**Known blind spots** (declare these families in `orphanScan.ignorePatterns`):
+
+- Prefixes stored in **cross-file** constants, class fields, or object properties typed as plain strings (`obj.translationPath`) — the scanner widens these to conservative suffix patterns, but treat such families as declared-dynamic
+- Keys composed at runtime from data (API responses, database values, enums built dynamically)
+- Keys referenced only outside the scanned source (backend responses, external configs, docs)
+
+**Recommended code style — anchor dynamic keys, don't avoid them.** Dynamic keys are tracked and are often the right design; what matters is that the *namespace* stays literal at the call site:
 
 ```ts
-import { detectConfig, getMissingTranslations, addTranslations, translateKey } from 'the-i18n-cli'
-
-const config = await detectConfig('/path/to/project')
-const missing = await getMissingTranslations({ projectDir: '/path/to/project' })
-
-await translateKey({
-  projectDir: '/path/to/project',
-  layer: 'root',
-  key: 'common.actions.save',
-  sourceLocale: 'en-US',
-  sourceValue: 'Save',
-  targetLocales: 'all',
-  overwrite: true,
-})
+t(`${prefix}.title`)                          // widens to any key ending .title
+t(`components.integrations.${type}.title`)    // widens to one segment under a known namespace
 ```
 
-## Project Config
+Both are counted as used, but the first suppresses every `.title` key in the project — on a large catalog that can be hundreds of keys the scan can no longer audit. Keeping a literal leading segment costs nothing and keeps the report meaningful. Literal key maps (`const KEYS = { draft: 'x.status.draft' } as const`) are the fully-static alternative where the set is closed.
 
-Drop a `.i18n-mcp.json` at your project root for project-specific context:
+Prefixes assembled in another scope defeat this even when they are literal — a `computed` returning `'a.b.' + x` reaches the call site as an opaque variable. Inline the namespace instead of the whole key.
 
-```json
-{
-  "$schema": "node_modules/the-i18n-mcp/schema.json",
-  "context": "B2B SaaS booking platform",
-  "glossary": {
-    "Booking": "Core concept. Dutch: 'Boeking'.",
-    "Resource": "A bookable entity (room, desk, person)"
-  },
-  "translationPrompt": "Professional but approachable tone. Keep translations concise.",
-  "localeNotes": {
-    "de": "Informal German (du)",
-    "de-formal": "Formal German (Sie)"
-  }
-}
-```
-
-See the [full config reference](https://github.com/fabkho/the-i18n-kit#project-config) for all options.
+`remove-orphans` is dry-run by default; run removals as a reviewed MR and treat the report's `uncertainKeys`/`dynamicKeys` sections as the audit trail.
 
 ## License
 

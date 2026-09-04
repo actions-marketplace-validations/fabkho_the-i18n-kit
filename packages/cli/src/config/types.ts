@@ -58,38 +58,50 @@ export interface ProjectConfig {
   translationPrompt?: string
   /** Per-locale context (formal register, regional differences, etc.) */
   localeNotes?: Record<string, string>
-  /** Few-shot translation examples */
-  examples?: Array<Record<string, string>>
+  /**
+   * Few-shot translation examples. `key` is required — the prompt names it, so
+   * an entry without one reaches the provider as the word "undefined" (#367).
+   * Every other property is a locale code mapped to its translated value.
+   */
+  examples?: Array<{ key: string, note?: string } & Record<string, string>>
   /** Per-layer scan directories and ignore patterns for orphan key detection. Keys are layer names. */
   orphanScan?: Record<string, {
     /** Glob patterns for translation keys to exclude from orphan detection (e.g., "common.datetime.months.*"). */
     ignorePatterns?: string[]
   }>
-  /** Default output directory for diagnostic tool reports. Set to true for '.i18n-reports/', or a string for a custom relative path. */
-  reportOutput?: string | boolean
+  /**
+   * Where diagnostic reports are written: `true` for '.i18n-reports/', or a
+   * relative path. There is no `false` — omitting the key is how you say no,
+   * and accepting both spellings of "off" would be two ways to mean one thing.
+   */
+  reportOutput?: string | true
   /** Locale directories for the generic adapter. Each entry is a path string (layer="default") or { path, layer } object. */
   localeDirs?: Array<string | { path: string; layer: string }>
   /** Default locale code (required for generic adapter activation). */
   defaultLocale?: string
   /** Explicit list of locale codes. If set, overrides framework auto-detection (all adapters). Auto-discovered when absent. */
   locales?: string[]
+  /**
+   * Human-maintained locales excluded from automatic translation.
+   * Entries may be any locale ref (code, language tag, or file name);
+   * entries that do not match a known locale are ignored with a warning.
+   * Explicitly naming a protected locale in targetLocales overrides the
+   * protection (with a warning).
+   */
+  protectedLocales?: string[]
   /** Override the auto-detected locale file format. E.g., "json" or "php-array". Useful when both formats exist or auto-detection picks wrong. */
   localeFileFormat?: LocaleFileFormat
-  /** Model preferences for `translate_missing` sampling requests. Overrides the built-in defaults (fast/cheap model bias). */
-  samplingPreferences?: {
-    /** Ordered model name hints (substring match). First match wins. E.g., ["flash", "haiku"] */
-    hints?: string[]
-    /** 0 = don't care, 1 = most important factor */
-    costPriority?: number
-    /** 0 = don't care, 1 = most important factor */
-    speedPriority?: number
-    /** 0 = don't care, 1 = most important factor */
-    intelligencePriority?: number
-  }
+  /**
+   * Base URL for the LLM provider — gateways, self-hosted model servers and
+   * corporate proxies that speak the provider's own protocol. Overrides the
+   * endpoint only, not the request shape or auth header. Overridden by the
+   * I18N_BASE_URL env var and by --baseUrl. Not supported by "google".
+   */
+  providerBaseUrl?: string
 }
 
 /**
- * The fully resolved i18n configuration for a Nuxt project.
+ * The fully resolved i18n configuration for a project.
  */
 export interface I18nConfig {
   /** Detected framework name (e.g., 'nuxt', 'laravel'). Set by the detector. */

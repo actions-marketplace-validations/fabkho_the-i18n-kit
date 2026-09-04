@@ -1,16 +1,15 @@
 /**
- * Tests for ancestor-based layer dedup (issue #70).
+ * Tests for ancestor-based layer dedup.
  *
  * When two layers claim the same locale directory path, the layer whose
  * `layerRootDir` is an ancestor of (or equal to) the locale dir path is the
  * true owner. The other layer gets `aliasOf` pointing to the owner.
- *
- * The tests exercise `resolveLayerOwnership` — the pure helper extracted
- * from the dedup logic in `src/adapters/nuxt/index.ts`.
  */
 
 import { describe, it, expect } from 'vitest'
-import { resolveLayerOwnership } from '../../src/adapters/nuxt/layer-dedup.js'
+import { claimLocaleDir, resolveLayerOwnership } from '../../src/adapters/nuxt/layer-dedup.js'
+import type { LayerRef } from '../../src/adapters/nuxt/layer-dedup.js'
+import type { LocaleDir } from '../../src/config/types.js'
 
 // Helper: build absolute paths without platform issues
 const base = '/projects'
@@ -122,5 +121,94 @@ describe('resolveLayerOwnership — when both are ancestors (same root), existin
     )
     expect(result.owner).toBe('root')
     expect(result.alias).toBe('root-copy')
+  })
+})
+
+describe('claimLocaleDir — stateful claim of a locale dir path', () => {
+  const shopDir: LocaleDir = { path: sharedLocaleDir, layer: 'app-shop', layerRootDir: appShop }
+  const outlookDir: LocaleDir = { path: sharedLocaleDir, layer: 'app-outlook', layerRootDir: appOutlook }
+
+  function setup(): { dirs: LocaleDir[], claims: Map<string, LayerRef> } {
+    return { dirs: [], claims: new Map<string, LayerRef>() }
+  }
+
+  it('first claim pushes the dir and records the layer as owner', () => {
+    const { dirs, claims } = setup()
+
+    claimLocaleDir(dirs, claims, shopDir, sharedLocaleDir)
+
+    expect(dirs).toEqual([shopDir])
+    expect(dirs[0]).not.toBe(shopDir) // defensive copy, no shared mutation
+    expect(claims.get(sharedLocaleDir)).toEqual({ layer: 'app-shop', layerRootDir: appShop })
+  })
+
+  it('pushes an alias when the existing layer keeps ownership', () => {
+    const { dirs, claims } = setup()
+
+    claimLocaleDir(dirs, claims, shopDir, sharedLocaleDir)
+    claimLocaleDir(dirs, claims, outlookDir, sharedLocaleDir)
+
+    expect(dirs).toEqual([
+      shopDir,
+      { ...outlookDir, aliasOf: 'app-shop' },
+    ])
+    // Claims map still points at the owner
+    expect(claims.get(sharedLocaleDir)).toEqual({ layer: 'app-shop', layerRootDir: appShop })
+  })
+
+  it('does not push a duplicate when the same layer claims the same path twice', () => {
+    const { dirs, claims } = setup()
+
+    claimLocaleDir(dirs, claims, shopDir, sharedLocaleDir)
+    claimLocaleDir(dirs, claims, { ...shopDir }, sharedLocaleDir)
+
+    expect(dirs).toEqual([shopDir])
+  })
+
+  it('takeover reorders: incoming true owner replaces in place, previous owner is demoted to alias', () => {
+    const { dirs, claims } = setup()
+
+    // app-outlook (not an ancestor) claims app-shop's locale dir first
+    claimLocaleDir(dirs, claims, outlookDir, sharedLocaleDir)
+    // app-shop (true ancestor) arrives later and takes over
+    claimLocaleDir(dirs, claims, shopDir, sharedLocaleDir)
+
+    expect(dirs).toEqual([
+      shopDir,
+      { ...outlookDir, aliasOf: 'app-shop' },
+    ])
+    // Claims map is updated to the new owner
+    expect(claims.get(sharedLocaleDir)).toEqual({ layer: 'app-shop', layerRootDir: appShop })
+  })
+
+  it('takeover clears a stale aliasOf on the promoted dir', () => {
+    const { dirs, claims } = setup()
+
+    claimLocaleDir(dirs, claims, outlookDir, sharedLocaleDir)
+    claimLocaleDir(dirs, claims, { ...shopDir, aliasOf: 'stale-owner' }, sharedLocaleDir)
+
+    expect(dirs[0].layer).toBe('app-shop')
+    expect(dirs[0].aliasOf).toBeUndefined()
+  })
+
+  it('regression: incoming dir is not dropped when the recorded owner is itself an alias', () => {
+    const otherPath = `${appOutlook}/i18n/locales`
+
+    // State where the claims map records app-outlook as owner of the shared
+    // path, but app-outlook only exists in dirs as an alias (it was demoted
+    // by an earlier takeover elsewhere).
+    const dirs: LocaleDir[] = [
+      { path: otherPath, layer: 'app-outlook', layerRootDir: appOutlook, aliasOf: 'somewhere-else' },
+    ]
+    const claims = new Map<string, LayerRef>([
+      [sharedLocaleDir, { layer: 'app-outlook', layerRootDir: appOutlook }],
+    ])
+
+    // The incoming true owner cannot find a non-alias entry for the recorded
+    // owner — it must still be kept as an alias, never silently dropped.
+    claimLocaleDir(dirs, claims, shopDir, sharedLocaleDir)
+
+    expect(dirs).toHaveLength(2)
+    expect(dirs[1]).toEqual({ ...shopDir, aliasOf: 'app-outlook' })
   })
 })

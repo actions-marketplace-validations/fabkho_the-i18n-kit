@@ -3,9 +3,11 @@
   "type": "module",
   "scripts": {
     "build": "pnpm -r --filter='./packages/*' build",
-    "test": "pnpm -r --filter='./packages/*' test",
-    "lint": "eslint packages/*/src/",
-    "typecheck": "pnpm --filter the-i18n-cli build && pnpm -r --filter='./packages/*' typecheck"
+    "test": "pnpm -r --filter='./packages/*' test && pnpm --filter @the-i18n-kit/docs test",
+    "lint": "eslint packages/*/src/ docs/generate/ docs/tests/",
+    "generate:schema": "node scripts/generate-schema.mjs",
+    "typecheck": "pnpm --filter the-i18n-cli build && pnpm -r --filter='./packages/*' typecheck && pnpm --filter @the-i18n-kit/docs typecheck",
+    "docs:generate": "pnpm --filter @the-i18n-kit/docs generate:reference"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.5.0",
@@ -16,8 +18,13 @@
     "typescript": "^5.8.0",
     "typescript-eslint": "^8.57.0"
   },
+  "pnpm": {
+    "overrides": {
+      "vue": "^3.5.41"
+    }
+  },
   "packageManager": "pnpm@10.12.1",
   "engines": {
-    "node": ">=18.12.0"
+    "node": ">=20.0.0"
   }
 }

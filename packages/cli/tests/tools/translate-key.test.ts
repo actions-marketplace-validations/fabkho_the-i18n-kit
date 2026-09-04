@@ -30,9 +30,11 @@ describe('translate_key', () => {
     })
 
     expect(result.dryRun).toBe(true)
+    expect(result.mode).toBe('dry-run')
     expect(result.sourceLocale).toMatchObject({ code: 'en', language: 'en-US', file: 'en-US.json' })
     expect(result.updatedSource).toBe(true)
-    expect(result.translated).toEqual(expect.arrayContaining(['de', 'fr', 'es']))
+    expect(result.translated).toEqual([])
+    expect(result.wouldTranslate).toEqual(expect.arrayContaining(['de', 'fr', 'es']))
     expect(result.placeholderValidation).toEqual({
       ok: true,
       placeholders: ['{count}'],
@@ -52,7 +54,7 @@ describe('translate_key', () => {
       dryRun: true,
     })
 
-    expect(result.translated).toEqual(['de', 'fr'])
+    expect(result.wouldTranslate).toEqual(['de', 'fr'])
   })
 
   it('skips existing targets when overwrite is false', async () => {
@@ -66,8 +68,11 @@ describe('translate_key', () => {
       dryRun: true,
     })
 
-    expect(result.translated).toEqual([])
-    expect(result.skipped).toEqual(['de', 'fr'])
+    expect(result.wouldTranslate).toEqual([])
+    expect(result.skipped).toEqual([
+      { locale: 'de', reason: 'already-translated' },
+      { locale: 'fr', reason: 'already-translated' },
+    ])
   })
 })
 
@@ -90,7 +95,148 @@ describe('placeholder validation', () => {
         key: 'bookingCreator.options.removeSubResource',
         missing: ['{subResource}'],
         extra: ['{resource}'],
+        kind: 'placeholder',
       },
+    ])
+  })
+
+  it('rejects a plural variant that drops a placeholder even when another variant keeps it', () => {
+    const result = validatePlaceholders(
+      'requests.count',
+      '{count} Anfrage | {count} Anfragen',
+      [
+        // whole-value sets match ({count} present) — but the singular dropped it
+        { locale: 'ga', value: 'Iarratas amháin | {count} iarratais' },
+        { locale: 'fr', value: '{count} demande | {count} demandes' },
+      ],
+    )
+
+    expect(result.ok).toBe(false)
+    expect(result.errors).toEqual([
+      {
+        locale: 'ga',
+        key: 'requests.count',
+        missing: ['{count}'],
+        extra: [],
+        kind: 'placeholder',
+      },
+    ])
+  })
+
+  it('rejects a translation with a different plural variant count', () => {
+    const result = validatePlaceholders(
+      'requests.count',
+      '{count} Anfrage | {count} Anfragen',
+      [{ locale: 'sk', value: '{count} žiadosť | {count} žiadosti | {count} žiadostí' }],
+    )
+
+    expect(result.ok).toBe(false)
+    expect(result.errors).toEqual([
+      {
+        locale: 'sk',
+        key: 'requests.count',
+        missing: [],
+        extra: [],
+        kind: 'plural-count',
+        sourceVariants: 2,
+        targetVariants: 3,
+      },
+    ])
+  })
+
+  it('does not treat a bare pipe without surrounding spaces as a plural separator', () => {
+    const result = validatePlaceholders(
+      'shortcuts.save',
+      'Drücke {key} für A|B-Modus',
+      [{ locale: 'en', value: 'Press {key} for A|B mode' }],
+    )
+
+    expect(result.ok).toBe(true)
+    expect(result.errors).toEqual([])
+  })
+
+  it('never applies plural splitting for the php-array format', () => {
+    // PHP has no pipe plural convention — a differing variant count must not
+    // trigger a plural-count error; only the whole-value set counts.
+    const result = validatePlaceholders(
+      'requests.count',
+      ':count Anfrage | :count Anfragen',
+      [{ locale: 'en', value: ':count request' }],
+      'php-array',
+    )
+
+    expect(result.ok).toBe(true)
+    expect(result.errors).toEqual([])
+  })
+})
+
+describe('translate_missing compact mode', () => {
+  it('keeps fallback contexts, message, reasons, and locale metadata in compact output', async () => {
+    const result = await translateMissing({
+      projectDir: appAdminDir,
+      layer: 'root',
+      referenceLocale: 'de-DE',
+      targetLocales: ['es-ES'],
+      keys: ['admin.users.list'],
+      compact: true,
+      // no translateFn — the no-backend fallback path
+    })
+
+    // fallback contexts survive compaction (guidance messages are surface-owned)
+    expect(result.fallbackContexts).toHaveProperty('es')
+    expect(result.summary.mode).toBe('agent')
+
+    // locale metadata as full triples
+    expect(result.summary.referenceLocale).toMatchObject({ code: 'de', language: 'de-DE', file: 'de-DE.json' })
+    expect(result.summary.targetLocales).toEqual([
+      expect.objectContaining({ code: 'es', language: 'es-ES', file: 'es-ES.json' }),
+    ])
+
+    // per-locale entries keep all non-key metadata; per-key arrays become counts
+    expect(result.summary.byLocale).toEqual([
+      expect.objectContaining({ locale: 'es', mode: 'agent', missing: 1, skipped: 1, translated: 0, failed: 0 }),
+    ])
+    expect(result.summary.layer).toBe('root')
+    expect(result.summary.dryRun).toBe(false)
+
+    // compact drops only per-key detail
+    expect(result.results).toBeUndefined()
+  })
+
+  it('reports dryRun in compact output', async () => {
+    const result = await translateMissing({
+      projectDir: appAdminDir,
+      layer: 'root',
+      referenceLocale: 'de-DE',
+      targetLocales: ['es-ES'],
+      keys: ['admin.users.list'],
+      compact: true,
+      dryRun: true,
+    })
+
+    expect(result.summary.dryRun).toBe(true)
+    expect(result.summary.totalWouldTranslate).toBe(1)
+    expect(result.summary.byLocale).toEqual([
+      expect.objectContaining({ locale: 'es', wouldTranslate: 1, translated: 0, mode: 'dry-run' }),
+    ])
+    expect(result.fallbackContexts).toBeUndefined()
+  })
+
+  it('omits fallback contexts from compact output when nothing is missing', async () => {
+    const result = await translateMissing({
+      projectDir: appAdminDir,
+      layer: 'root',
+      referenceLocale: 'de-DE',
+      targetLocales: ['es-ES'],
+      keys: ['admin.dashboard.title'],
+      compact: true,
+    })
+
+    expect(result.fallbackContexts).toBeUndefined()
+    expect(result.summary.message).toBeUndefined()
+    expect(result.summary.totalTranslated).toBe(0)
+    expect(result.summary.byLocale).toEqual([
+      expect.objectContaining({ locale: 'es', missing: 0, translated: 0, failed: 0, skipped: 0 }),
     ])
   })
 })
@@ -111,10 +257,11 @@ describe('translate_missing metadata', () => {
       expect.objectContaining({ code: 'es', language: 'es-ES', file: 'es-ES.json' }),
     ])
     expect(result.results.es).toMatchObject({
-      translated: ['admin.users.list'],
+      wouldTranslate: ['admin.users.list'],
+      translated: [],
       failed: [],
-      samplingUsed: false,
-      reason: 'dry-run',
+      mode: 'dry-run',
+      missing: 1,
     })
   })
 })

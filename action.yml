@@ -36,6 +36,10 @@ inputs:
     description: 'Preview translations without writing files'
     required: false
     default: 'false'
+  fail_on_failed:
+    description: 'Fail the step (exit 2) when any key failed to translate. Off by default: a partly failed run still writes what succeeded, and the failed keys stay missing for the next run to retry.'
+    required: false
+    default: 'false'
   working_directory:
     description: 'Project root directory (default: github.workspace)'
     required: false
@@ -60,11 +64,21 @@ inputs:
   base_branch:
     description: 'Base branch for the PR (default: the branch that triggered the workflow)'
     required: false
+  cli_version:
+    description: 'the-i18n-cli version to install (npm dist-tag or version). Use "skip" if the CLI is already installed (e.g. a local build).'
+    required: false
+    default: 'latest'
 
 outputs:
+  gate_tripped:
+    description: 'Names of any CI gates that tripped. The job fails after the translations are committed.'
+    value: ${{ steps.translate.outputs.gate_tripped }}
   translated_count:
     description: 'Number of keys translated'
     value: ${{ steps.translate.outputs.translated_count }}
+  failed_count:
+    description: 'Number of keys that failed to translate'
+    value: ${{ steps.translate.outputs.failed_count }}
   pr_url:
     description: 'URL of the created PR (only when create_pr is true)'
     value: ${{ steps.create-pr.outputs.pr_url }}
@@ -78,8 +92,23 @@ runs:
         node-version: 22
 
     - name: Install the-i18n-cli
+      if: inputs.cli_version != 'skip'
       shell: bash
-      run: npm install -g the-i18n-cli@latest
+      env:
+        CLI_VERSION: ${{ inputs.cli_version }}
+        PROVIDER: ${{ inputs.provider }}
+      run: |
+        set -euo pipefail
+        # The provider SDKs are optional peer dependencies of the CLI — install
+        # the one matching the chosen provider alongside it.
+        case "$PROVIDER" in
+          openai)    SDK="openai" ;;
+          anthropic) SDK="@anthropic-ai/sdk" ;;
+          google)    SDK="@google/genai" ;;
+          *)         echo "::error::Unknown provider: $PROVIDER"; exit 1 ;;
+        esac
+        # --legacy-peer-deps: openai@5 declares peerOptional zod@^3, the CLI uses zod@^4
+        npm install -g --legacy-peer-deps "the-i18n-cli@${CLI_VERSION}" "$SDK"
 
     - name: Translate missing keys
       id: translate
@@ -119,14 +148,58 @@ runs:
         if [ "${{ inputs.dry_run }}" = "true" ]; then
           args+=(--dry-run)
         fi
+        if [ "${{ inputs.fail_on_failed }}" = "true" ]; then
+          args+=(--fail-on-failed)
+        fi
 
+        # The CLI owns the pass/fail decision and reports it as an exit code:
+        # 0 success, 1 the run itself failed, 2 a requested gate tripped. Parsing
+        # counts to decide that here would re-couple this action to output field
+        # names, which is the defect class that broke downstream pipelines.
+        set +e
         output=$(the-i18n-cli translate "${args[@]}")
-
-        # Extract translated count from JSON output
-        count=$(echo "$output" | jq -r '.translated // .totalTranslated // 0')
-        echo "translated_count=$count" >> "$GITHUB_OUTPUT"
-
+        status=$?
+        set -e
         echo "$output"
+
+        # Counts are read for the step outputs and the log only — never to
+        # decide pass/fail. Tolerant, so a malformed result cannot mask $status.
+        # Dry runs report their counts as totalWouldTranslate.
+        # head -n1: a single result yields a single line today, but a multi-document
+        # stdout would make these multiline and turn the -gt below into a hard
+        # bash error under set -e, defeating the tolerance this fallback exists for.
+        count=$(echo "$output" | jq -r '(.summary.totalTranslated // 0) + (.summary.totalWouldTranslate // 0)' 2>/dev/null | head -n1 || echo 0)
+        failed=$(echo "$output" | jq -r '.summary.totalFailed // 0' 2>/dev/null | head -n1 || echo 0)
+        count=${count:-0}
+        failed=${failed:-0}
+        echo "translated_count=$count" >> "$GITHUB_OUTPUT"
+        echo "failed_count=$failed" >> "$GITHUB_OUTPUT"
+
+        # A tripped gate is recorded, not acted on here. Failing this step would
+        # skip the PR step below, throwing away the translations the run did
+        # produce — reported red and lost, with the next run redoing all of it.
+        # The gate fails the job in a later step, once the work is safe.
+        case "$status" in
+          0) ;;
+          2)
+            gates=$(echo "$output" | jq -rc '[.gatesTripped[]?.name] | join(", ")' 2>/dev/null || echo "unknown")
+            # An absent or empty gatesTripped joins to "", which the final step
+            # reads as "no gate" and skips — turning exit 2 into a green job.
+            # The exit code is the authority on whether a gate tripped; the
+            # names only shape the message.
+            gates=${gates:-unnamed gate}
+            echo "::warning::CI gate tripped: ${gates}. The run itself succeeded — the job fails after the translations are committed."
+            echo "gate_tripped=${gates}" >> "$GITHUB_OUTPUT"
+            ;;
+          *)
+            echo "::error::translate failed (exit ${status}) — check provider, model, and API key."
+            exit "$status"
+            ;;
+        esac
+
+        if [ "$failed" -gt 0 ]; then
+          echo "::warning::$failed keys failed to translate ($count succeeded). They are still missing, so re-running retries them. Set fail_on_failed: true to make this fail the step instead."
+        fi
 
     - name: Create PR with translations
       id: create-pr
@@ -209,3 +282,11 @@ runs:
       shell: bash
       run: |
         echo "::notice::Dry run complete. ${{ steps.translate.outputs.translated_count }} keys would be translated."
+
+    # Last, so the gate reddens the job without costing the run its work.
+    - name: Fail on tripped gate
+      if: steps.translate.outputs.gate_tripped != ''
+      shell: bash
+      run: |
+        echo "::error::CI gate tripped: ${{ steps.translate.outputs.gate_tripped }}. Findings exist; the translations that succeeded were still committed."
+        exit 2
