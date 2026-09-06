@@ -13,7 +13,6 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { commands } from '../../../packages/cli/src/commands/index.js'
 import { GATE_MARKER, buildCliModel } from '../../generate/reference/cli-model.js'
 import { buildReference } from '../../generate/reference/build.js'
 import { loadCliSource } from '../../generate/sources/cli.js'
@@ -33,22 +32,10 @@ const aliasNames = model.commands.flatMap(command =>
 )
 
 describe('the CLI reference against the command registry', () => {
-  it('documents every command the CLI exposes, on its own page or as an alias', () => {
+  it('documents every registered command, on its own page or as an alias', () => {
     const documented = new Set([...pagedCommands(output), ...aliasNames])
-    expect([...documented].sort()).toEqual([...source.exposed].sort())
-  })
-
-  it('documents no command the CLI filters out of its own registry', () => {
-    // Those cannot be invoked — running one prints "Unknown command" — because
-    // the operations are reachable through MCP tools instead. A page for one
-    // would document a command that fails when a reader tries it.
-    const hidden = Object.keys(commands).filter(name => !source.exposed.includes(name))
-    expect(hidden.length).toBeGreaterThan(0)
-
-    for (const name of hidden) {
-      expect(output.has(`content/9.reference/1.cli/${name}.md`)).toBe(false)
-      expect(overview(output)).not.toContain(`\`${name}\``)
-    }
+    const registered = source.entries.map(entry => entry.name)
+    expect([...documented].sort()).toEqual([...registered].sort())
   })
 
   it('links every command page from the overview', () => {
@@ -74,7 +61,12 @@ describe('the CLI reference against the command registry', () => {
     const shared = new Set(model.sharedArgs.map(arg => arg.name))
 
     for (const command of model.commands) {
-      const expected = command.args.map(arg => arg.name).filter(name => !shared.has(name))
+      // Long aliases count as documented flags: a flag renamed to match its MCP
+      // parameter keeps its previous spelling, and a reader has to be told
+      // which one they can type.
+      const expected = command.args
+        .filter(arg => !shared.has(arg.name))
+        .flatMap(arg => [arg.name, ...arg.alias.filter(alias => alias.length > 1)])
       const documented = documentedFlags(commandPage(output, command.name))
       expect([...documented].sort()).toEqual([...expected].sort())
     }
@@ -96,12 +88,6 @@ describe('the CLI reference against the command registry', () => {
     // Guards against the intersection collapsing to nothing (every flag then
     // repeats on every page) or swallowing a genuinely command-specific flag.
     expect(model.sharedArgs.map(arg => arg.name).sort()).toEqual(['json', 'projectDir'])
-  })
-
-  it('folds translate-missing into translate rather than duplicating the page', () => {
-    expect(Object.keys(commands)).toContain('translate-missing')
-    expect(pagedCommands(output)).not.toContain('translate-missing')
-    expect(commandPage(output, 'translate')).toContain('translate-missing')
   })
 
   it('documents every gate flag the CLI declares on the overview', () => {

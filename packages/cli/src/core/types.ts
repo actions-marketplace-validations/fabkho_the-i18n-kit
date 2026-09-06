@@ -3,11 +3,37 @@
  * These are plain objects — no MCP content wrappers.
  */
 
-// ─── detect_i18n_config ──────────────────────────────────────────
+// ─── discover ────────────────────────────────────────────────────
 // Returns I18nConfig directly (re-exported from config/types)
 export type { I18nConfig } from '../config/types.js'
+import type { I18nConfig } from '../config/types.js'
+import type { SerializedLayerGraph } from '../config/layer-graph.js'
 import type { LocaleRefAmbiguity } from './shared.js'
 export type { LocaleRefAmbiguity } from './shared.js'
+
+/**
+ * The whole resolved project in one answer: the config, the locale dirs behind
+ * it, the topology those dirs form, and which locales are maintained by hand.
+ *
+ * A superset of `I18nConfig` rather than a wrapper around it, because every
+ * caller of the old three-call sequence merged the parts anyway and a nested
+ * `config` key would break each of them for nothing.
+ */
+export interface DescribeProjectResult extends I18nConfig {
+  /**
+   * Canonical codes of the locales the translate operations leave alone. The
+   * raw refs stay visible under `projectConfig.protectedLocales`.
+   */
+  protectedLocales: string[]
+  /** One entry per locale directory, with file counts and key namespaces. */
+  layers: LocaleDirInfo[]
+  /**
+   * Which layers are shared, which apps consume which layer, and what each
+   * alias points at — the topology behind the flat `layers` list, and what
+   * answers where a new key belongs.
+   */
+  layerGraph: SerializedLayerGraph
+}
 
 // ─── list_locale_dirs ────────────────────────────────────────────
 
@@ -24,7 +50,7 @@ export interface LocaleDirInfo {
 // Returns Record<string, Record<string, unknown>>
 // (locale code → key → value)
 
-// ─── add / update translations ───────────────────────────────────
+// ─── write translations ──────────────────────────────────────────
 
 export interface MutationPreview {
   locale: string
@@ -84,28 +110,6 @@ export interface MutationResult {
   ambiguousLocales?: LocaleRefAmbiguity[]
 }
 
-export interface AddTranslationsResult {
-  /** Present when dryRun=true */
-  dryRun?: boolean
-  wouldAdd?: MutationPreview[]
-  /** Present when dryRun=false */
-  added?: string[]
-  skipped: string[]
-  filesWritten?: number
-  warnings?: string[]
-  /** Present only when a locale ref resolved to nothing — see UnresolvedLocaleRef. */
-  unresolvedLocales?: UnresolvedLocaleRef[]
-  /** Present only when a locale ref matched several locales. */
-  ambiguousLocales?: LocaleRefAmbiguity[]
-  placeholderValidation?: PlaceholderValidationResult
-  summary?: {
-    keysToAdd: number
-    keysSkipped: number
-    message: string
-  }
-  skippedKeys?: string[]
-}
-
 export interface WriteTranslationsResult {
   /** Present when dryRun=true */
   dryRun?: boolean
@@ -122,27 +126,6 @@ export interface WriteTranslationsResult {
   ambiguousLocales?: LocaleRefAmbiguity[]
   summary?: {
     keysWritten: number
-    keysSkipped: number
-    message: string
-  }
-  skippedKeys?: string[]
-}
-
-export interface UpdateTranslationsResult {
-  /** Present when dryRun=true */
-  dryRun?: boolean
-  wouldUpdate?: MutationPreview[]
-  /** Present when dryRun=false */
-  updated?: string[]
-  skipped: string[]
-  filesWritten?: number
-  /** Present only when a locale ref resolved to nothing — see UnresolvedLocaleRef. */
-  unresolvedLocales?: UnresolvedLocaleRef[]
-  /** Present only when a locale ref matched several locales. */
-  ambiguousLocales?: LocaleRefAmbiguity[]
-  placeholderValidation?: PlaceholderValidationResult
-  summary?: {
-    keysToUpdate: number
     keysSkipped: number
     message: string
   }
@@ -198,16 +181,13 @@ export interface InitProjectConfigResult {
 // ─── get_missing_translations ────────────────────────────────────
 
 export interface MissingTranslationsResult {
-  /** Absent when the full report went to `reportFile` instead. */
-  missing?: Record<string, Record<string, string[]>>
+  missing: Record<string, Record<string, string[]>>
   summary: {
     referenceLocale: string | LocaleRefInfo
     targetLocales: Array<string | LocaleRefInfo>
     layersScanned: string[]
     totalMissingKeys: number
   }
-  /** Present when reportOutput is configured */
-  reportFile?: string
 }
 
 // ─── status ──────────────────────────────────────────────────────
@@ -232,11 +212,22 @@ export interface LayerStatus {
   missing: number
   empty: number
   completion: number
+  /**
+   * Apps whose declared layers include this one. Empty means either no app
+   * information exists (hand-built configs) or nothing consumes the layer.
+   */
+  consumedBy: string[]
 }
 
 export interface TranslationStatusSummary {
   referenceLocale: LocaleRefInfo
   layersScanned: string[]
+  /**
+   * Scanned layers no app consumes — keys nothing can render. Stays empty
+   * unless the project declares more than one app, since a single-app project
+   * has no consumption edges worth reporting on.
+   */
+  unconsumedLayers: string[]
   localesChecked: number
   protectedLocales: string[]
   totalKeys: number
@@ -248,25 +239,27 @@ export interface TranslationStatusSummary {
 }
 
 export interface TranslationStatusResult {
-  locales?: LocaleStatus[]
-  layers?: LayerStatus[]
+  locales: LocaleStatus[]
+  layers: LayerStatus[]
+  /**
+   * Locale → layer → the keys whose value is an empty string. Present only when
+   * the caller asked to list them; `summary.emptyKeys` counts them either way.
+   * Added to the result rather than replacing it, so asking which keys are
+   * empty still answers the coverage question that prompted it.
+   */
+  empty?: Record<string, Record<string, string[]>>
   summary: TranslationStatusSummary
-  /** Present when the full breakdown went to a file instead. */
-  reportFile?: string
 }
 
-// ─── find_empty_translations ─────────────────────────────────────
+// ─── empty translations ────────────────────────────────────────────
 
 export interface EmptyTranslationsResult {
-  /** Absent when the full report went to `reportFile` instead. */
-  emptyKeys?: Record<string, Record<string, string[]>>
+  emptyKeys: Record<string, Record<string, string[]>>
   summary: {
     totalEmpty: number
     localesChecked: string[]
     layersChecked: string[]
   }
-  /** Present when reportOutput is configured */
-  reportFile?: string
 }
 
 // ─── search_translations ─────────────────────────────────────────
@@ -345,6 +338,13 @@ export interface MoveTranslationKeyPlanEntry {
   action: 'move' | 'deduplicate'
 }
 
+/**
+ * What a move returns: a rename result when the key stayed in its layer, a move
+ * result when it changed layers. A union rather than one merged shape, so
+ * neither half carries fields that can never be set for the other.
+ */
+export type MoveTranslationKeyOutcome = MoveTranslationKeyResult | RenameTranslationKeyResult
+
 export interface MoveTranslationKeyResult {
   /** Present when dryRun=true */
   dryRun?: boolean
@@ -386,6 +386,30 @@ export type TranslateFailReason =
 /** Why a key or locale was intentionally not attempted. */
 export type TranslateSkipReason = 'no-provider' | 'already-translated' | 'protected-locale'
 
+/** What translate_missing accepts. `layer` omitted means every layer at once. */
+export interface TranslateMissingOptions {
+  layer?: string
+  referenceLocale?: string
+  targetLocales?: string[]
+  locales?: string[]
+  keys?: string[]
+  batchSize?: number
+  dryRun?: boolean
+  compact?: boolean
+  projectDir?: string
+  /**
+   * Also re-translate keys whose target was written from source text that has
+   * changed since (translation memory only). Off by default: without it the
+   * operation still never touches an existing value, it only reports the stale
+   * ones in `stale`.
+   */
+  overwriteStale?: boolean
+  translateFn?: TranslateFn
+  progressFn?: ProgressFn
+  /** Called once after the pre-scan with the computed total number of progress steps. */
+  onProgressTotal?: (total: number) => void
+}
+
 export interface TranslateMissingLocaleResult {
   mode: TranslateMode
   /** Number of missing keys found for this locale. Always equals
@@ -396,6 +420,14 @@ export interface TranslateMissingLocaleResult {
   wouldTranslate?: string[]
   failed: Array<{ key: string, reason: TranslateFailReason }>
   skipped: Array<{ key: string, reason: TranslateSkipReason }>
+  /**
+   * Translation-memory only: keys whose target value was written from source
+   * text that has changed since, and which this run left untouched. A bucket of
+   * its own, not part of `missing` — these keys are translated, just outdated —
+   * so the invariant above still holds. Re-translating them needs
+   * `overwriteStale`, which counts them into `missing` instead.
+   */
+  stale?: string[]
   batches?: number
   model?: string
   writeError?: string
@@ -411,6 +443,7 @@ export interface TranslateMissingCompactEntry {
   failed: number
   skipped: number
   wouldTranslate?: number
+  stale?: number
   batches?: number
   model?: string
   writeError?: string
@@ -428,6 +461,8 @@ export interface TranslateMissingResult {
     totalFailed: number
     totalSkipped: number
     totalWouldTranslate?: number
+    /** Translation-memory only: stale keys left untouched, across all locales. */
+    staleCount?: number
     layer: string
     referenceLocale: string | LocaleRefInfo
     targetLocales: Array<string | LocaleRefInfo>
@@ -450,6 +485,8 @@ export interface TranslateAllLayersSummary {
   totalFailed: number
   totalSkipped: number
   totalWouldTranslate?: number
+  /** Translation-memory only: stale keys left untouched, across all layers and locales. */
+  staleCount?: number
   /** Layer names that were translated. */
   layers: string[]
   byLayer: TranslateLayerTotals[]
@@ -489,6 +526,19 @@ export interface TranslateKeyLocaleIssue {
   detail?: string
 }
 
+/**
+ * One locale translate_key deliberately left alone. `reason` is a closed set;
+ * `stale` refines 'already-translated' rather than extending it, so a caller
+ * can tell an existing translation that still matches its source from one the
+ * source has since outgrown.
+ */
+export interface TranslateKeySkip {
+  locale: string
+  reason: TranslateSkipReason
+  /** Translation-memory only: whether the existing value is out of date. */
+  stale?: boolean
+}
+
 export interface TranslateKeyResult {
   key: string
   sourceLocale: LocaleRefInfo
@@ -497,7 +547,7 @@ export interface TranslateKeyResult {
   translated: string[]
   /** Dry-run only: locales that would be translated. */
   wouldTranslate?: string[]
-  skipped: Array<{ locale: string, reason: TranslateSkipReason }>
+  skipped: TranslateKeySkip[]
   failed: TranslateKeyLocaleIssue[]
   filesWritten: number
   dryRun: boolean
@@ -536,8 +586,7 @@ export interface UnresolvedKeyWarningRef {
 }
 
 export interface FindOrphanKeysResult {
-  /** Absent when the full report went to `reportFile` instead. */
-  orphanKeys?: Record<string, string[]>
+  orphanKeys: Record<string, string[]>
   uncertainKeys?: Record<string, string[]>
   /**
    * Keys kept alive solely by the bare-candidate net — nothing a frontend
@@ -571,16 +620,13 @@ export interface FindOrphanKeysResult {
   dynamicKeyWarning?: string
   dynamicKeys?: DynamicKeyRef[]
   unresolvedKeyWarnings?: UnresolvedKeyWarningRef[]
-  /** Present when reportOutput is configured */
-  reportFile?: string
 }
 
 // ─── scan_code_usage ─────────────────────────────────────────────
 
 /** Where each requested key is referenced in source. */
 export interface CodeUsageResult {
-  /** Absent when the full report went to `reportFile` instead. */
-  usages?: Record<string, CodeUsageRef[]>
+  usages: Record<string, CodeUsageRef[]>
   /** Requested keys with no reference anywhere in the scanned source. */
   notFoundInCode?: string[]
   /** Dynamic expressions that could reach the requested keys. */
@@ -594,8 +640,6 @@ export interface CodeUsageResult {
     dirsScanned?: string[]
     message?: string
   }
-  /** Present when the full report went to a file instead. */
-  reportFile?: string
 }
 
 export interface CodeUsageRef {
@@ -616,8 +660,6 @@ export interface ScanCodeUsageResult {
   }
   notFoundInCode?: string[]
   dynamicKeys?: DynamicKeyRef[]
-  /** Present when reportOutput is configured */
-  reportFile?: string
 }
 
 // ─── remove_orphan_keys ─────────────────────────────────
@@ -650,8 +692,6 @@ export interface RemoveOrphanKeysResult {
   dynamicKeyWarning?: string
   dynamicKeys?: DynamicKeyRef[]
   unresolvedKeyWarnings?: UnresolvedKeyWarningRef[]
-  /** Present when reportOutput is configured */
-  reportFile?: string
 }
 
 // ─── scaffold_locale ─────────────────────────────────────────────

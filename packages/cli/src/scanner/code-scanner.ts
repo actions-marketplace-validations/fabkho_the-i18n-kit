@@ -346,7 +346,7 @@ async function extractFileEvidence(
  * frontend saw and the incoming one does not becomes an orphan, and orphans
  * get deleted, so the default stays where the evidence is.
  *
- * Flip it once `scripts/scanner-diff.mjs` reports nothing in that direction.
+ * Flip it once `packages/cli/scripts/scanner-diff.mjs` reports nothing in that direction.
  */
 let warnedRegexHatch = false
 
@@ -372,22 +372,113 @@ const oxcFrontend = createOxcFrontend()
 const phpFrontend = createPhpFrontend()
 const bladeFrontend = createBladeFrontend()
 
-export async function scanSourceFiles(rootDir: string, excludeDirs?: string[], patterns?: ScanPatternSet, frontends?: LanguageFrontend[]): Promise<ScanResult> {
-  const pat = patterns ?? VUE_NUXT_PATTERNS
-  const active = frontends ?? defaultFrontends(pat)
-  const ignore = [...pat.ignoreDirs, ...(excludeDirs ?? [])]
+/**
+ * Files in flight while scanning. Reading and parsing a file is mostly waiting
+ * on the filesystem, so a handful of files in flight hides that latency; far
+ * more only multiplies open descriptors, and the parsing itself is single-
+ * threaded anyway.
+ */
+const FILE_SCAN_CONCURRENCY = 12
 
-  let relativePaths: string[]
+/**
+ * Run `worker` over `items` with at most `limit` in flight, returning results
+ * in INPUT order — never completion order. Scan order is output order, and
+ * report bytes must not depend on which file finished first.
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+
+  const runner = async (): Promise<void> => {
+    for (let index = next++; index < items.length; index = next++) {
+      results[index] = await worker(items[index]!, index)
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, runner))
+  return results
+}
+
+/** One file's evidence, held until the ordered merge pass consumes it. */
+interface ScannedFile {
+  relPath: string
+  usages: KeyUsage[]
+  dynamicKeys: DynamicKeyUsage[]
+  /** Call-site candidates first, then the context-free ones — the merge order the shared set sees. */
+  bareStrings: Set<string>
+  bareDynamics: Set<string>
+  declined: boolean
+}
+
+/**
+ * The files a scan of `rootDir` would read, in scan order.
+ *
+ * Split out of `scanSourceFiles` because a caller reporting progress has to
+ * know how much work there is before the first file is read.
+ */
+export async function globSourceFiles(rootDir: string, excludeDirs?: string[], patterns?: ScanPatternSet): Promise<string[]> {
+  const pat = patterns ?? VUE_NUXT_PATTERNS
+  const ignore = [...pat.ignoreDirs, ...(excludeDirs ?? [])]
   try {
     // Sorted, because tinyglobby walks directories in parallel and promises no
     // stable order. Scan order becomes output order, so without this the same
     // binary disagrees with itself between runs on an unchanged tree — which
     // makes diffing before and after a change, the technique that catches what
     // unit tests miss, read as thousands of lines of noise (#327).
-    relativePaths = (await glob(pat.filePatterns, { cwd: rootDir, ignore, dot: false, absolute: false })).sort()
+    return (await glob(pat.filePatterns, { cwd: rootDir, ignore, dot: false, absolute: false })).sort()
   } catch {
-    return { usages: [], dynamicKeys: [], filesScanned: 0, declinedFiles: [], uniqueKeys: new Set(), bareStringCandidates: new Set(), bareDynamicCandidates: new Set() }
+    // An unwalkable root is an empty scan, not a failed one.
+    return []
   }
+}
+
+/** What a caller can hand a scan beyond its inputs. */
+export interface ScanSourceFilesHooks {
+  /** Files to read, relative to `rootDir` — a {@link globSourceFiles} result, reused instead of walking the tree twice. */
+  files?: string[]
+  /**
+   * Called once per file, right after it was read. `done` counts completions,
+   * so it fires in completion order while the scan result itself stays in
+   * input order — a counter is all that depends on the timing.
+   */
+  onFile?: (done: number, total: number, file: string) => void
+}
+
+export async function scanSourceFiles(rootDir: string, excludeDirs?: string[], patterns?: ScanPatternSet, frontends?: LanguageFrontend[], hooks?: ScanSourceFilesHooks): Promise<ScanResult> {
+  const pat = patterns ?? VUE_NUXT_PATTERNS
+  const active = frontends ?? defaultFrontends(pat)
+  const relativePaths = hooks?.files ?? await globSourceFiles(rootDir, excludeDirs, pat)
+  const fileTotal = relativePaths.length
+  let filesDone = 0
+
+  // Each file yields its own evidence, so reads and parses can overlap; the
+  // accumulators below are filled in a second, strictly ordered pass.
+  const scanned = await mapWithConcurrency(relativePaths, FILE_SCAN_CONCURRENCY, async (relPath): Promise<ScannedFile | null> => {
+    const filePath = join(rootDir, relPath)
+    let content: string
+    try {
+      content = await readFile(filePath, 'utf-8')
+    } catch {
+      // An unreadable file still consumed one of the counted files, so it
+      // reports too — otherwise `done` never reaches the announced total.
+      hooks?.onFile?.(++filesDone, fileTotal, relPath)
+      return null
+    }
+
+    const constTable = (pat.bareShapes ?? 'js') === 'js' ? collectConstKeyTable(content) : new Map<string, string>()
+    const { usages, dynamicKeys, bareStringCandidates: bareFromCalls, declined } = await extractFileEvidence(content, filePath, active, pat)
+
+    const bareStrings = new Set(bareFromCalls)
+    const bareDynamics = new Set<string>()
+    collectBareCandidates(content, constTable, bareStrings, bareDynamics, pat.bareShapes)
+
+    hooks?.onFile?.(++filesDone, fileTotal, relPath)
+    return { relPath, usages, dynamicKeys, bareStrings, bareDynamics, declined }
+  })
 
   const allUsages: KeyUsage[] = []
   const allDynamicKeys: DynamicKeyUsage[] = []
@@ -396,24 +487,17 @@ export async function scanSourceFiles(rootDir: string, excludeDirs?: string[], p
   const declinedFiles: string[] = []
   let filesScanned = 0
 
-  for (const relPath of relativePaths) {
-    const filePath = join(rootDir, relPath)
-    let content: string
-    try {
-      content = await readFile(filePath, 'utf-8')
-    } catch {
-      log.warn(`Failed to read file: ${filePath}`)
+  for (const [index, file] of scanned.entries()) {
+    if (!file) {
+      // Warned here rather than in the worker, so the log reads in scan order too.
+      log.warn(`Failed to read file: ${join(rootDir, relativePaths[index]!)}`)
       continue
     }
-
-    const constTable = (pat.bareShapes ?? 'js') === 'js' ? collectConstKeyTable(content) : new Map<string, string>()
-    const { usages, dynamicKeys, bareStringCandidates: bareFromCalls, declined } = await extractFileEvidence(content, filePath, active, pat)
-    if (declined) declinedFiles.push(relPath)
-    allUsages.push(...usages)
-    allDynamicKeys.push(...dynamicKeys)
-    for (const candidate of bareFromCalls) bareStringCandidates.add(candidate)
-
-    collectBareCandidates(content, constTable, bareStringCandidates, bareDynamicCandidates, pat.bareShapes)
+    if (file.declined) declinedFiles.push(file.relPath)
+    allUsages.push(...file.usages)
+    allDynamicKeys.push(...file.dynamicKeys)
+    for (const candidate of file.bareStrings) bareStringCandidates.add(candidate)
+    for (const candidate of file.bareDynamics) bareDynamicCandidates.add(candidate)
 
     filesScanned++
   }
@@ -498,11 +582,27 @@ export interface MisplacedUsage {
   usingApps: string[]
 }
 
+/**
+ * Progress hooks for a scan that spans several units.
+ *
+ * `onTotal` fires once, after every unit has been globbed and before the first
+ * file is read: a caller that reports progress has to know the size of the
+ * work before it reports any of it.
+ */
+export interface OrphanScanProgress {
+  /** Total number of source files this scan will read, across all units. */
+  onTotal: (total: number) => void
+  /** `done`/`total` count files across all units; `unit` and `file` say where the scan currently is. */
+  onFile: (done: number, total: number, unit: string, file: string) => void
+}
+
 interface OrphanScanBaseOptions {
   keysByLayer: Map<string, { keys: string[]; localeDir: { layer: string } }>
   excludeDirs?: string[]
   resolveIgnorePatterns: (layerName: string) => string[] | undefined
   patterns?: ScanPatternSet
+  /** Set by a caller that wants to watch a scan that takes seconds. */
+  progress?: OrphanScanProgress
 }
 
 /**
@@ -604,9 +704,28 @@ export async function findOrphanKeysForConfig(options: OrphanScanOptions): Promi
 
   let totalFilesDeclined = 0
 
-  for (const unit of units) {
-    const ignores = globalScope ? [] : nestedUnitIgnores(unit, units)
-    const result = await scanSourceFiles(unit.dir, [...(excludeDirs ?? []), ...ignores], patterns)
+  // Every unit is globbed before any file is read. The file lists are what the
+  // scan needs anyway; taking them first is what makes the total knowable
+  // before the first file is reported.
+  const unitExcludes = units.map(unit =>
+    [...(excludeDirs ?? []), ...(globalScope ? [] : nestedUnitIgnores(unit, units))])
+  const unitFiles = await Promise.all(units.map((unit, index) =>
+    globSourceFiles(unit.dir, unitExcludes[index], patterns)))
+  const fileTotal = unitFiles.reduce((sum, files) => sum + files.length, 0)
+  options.progress?.onTotal(fileTotal)
+
+  const progress = options.progress
+  let filesDone = 0
+
+  for (const [index, unit] of units.entries()) {
+    const result = await scanSourceFiles(unit.dir, unitExcludes[index], patterns, undefined, {
+      files: unitFiles[index],
+      // The per-unit counts the scanner reports are folded into one running
+      // count, so a caller sees one scan rather than one per app.
+      onFile: progress === undefined
+        ? undefined
+        : (_done, _total, file) => progress.onFile(++filesDone, fileTotal, unit.name, file),
+    })
     totalFilesScanned += result.filesScanned
     totalFilesDeclined += result.declinedFiles.length
     const dynamicRaw: DynamicKeyUsage[] = [

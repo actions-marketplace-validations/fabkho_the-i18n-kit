@@ -1,6 +1,6 @@
 /**
- * Mutating operations: write/add/update/remove/rename translation keys and
- * scaffold locale files.
+ * Mutating operations: write/remove/rename/move translation keys and scaffold
+ * locale files.
  */
 
 import { detectI18nConfig } from '../config/detector.js'
@@ -21,21 +21,20 @@ import { scaffoldLocale } from '../tools/scaffold-locale.js'
 
 import type {
   MutationResult,
-  AddTranslationsResult,
   WriteTranslationsResult,
-  UpdateTranslationsResult,
   ScaffoldLocaleResult,
   ScaffoldLocaleFileInfo,
   PlaceholderValidationResult,
   UnresolvedLocaleRef,
   RemoveTranslationsResult,
   RenameTranslationKeyResult,
-  MoveTranslationKeyResult,
+  MoveTranslationKeyOutcome,
   MoveTranslationKeyPlanEntry,
 } from './types.js'
 import { findWritableLayerOrThrow, findLocaleImpl, findLocaleSuggestion, resolveLocaleRef } from './shared.js'
 import type { LocaleRefAmbiguity } from './shared.js'
 import { validatePlaceholders, mergePlaceholderValidation } from './ops-translate.js'
+import { recordWrittenTranslations } from './translate/memory.js'
 
 /**
  * Shared logic for write_translations (supports add, update, and upsert modes).
@@ -47,8 +46,9 @@ async function applyTranslations(
   mode: 'add' | 'update' | 'upsert',
   findLocale: (config: I18nConfig, ref: string) => LocaleDefinition | undefined,
   dryRun = false,
-): Promise<MutationResult> {
+): Promise<MutationResult & { writes: AppliedWrite[] }> {
   const applied: string[] = []
+  const writes: AppliedWrite[] = []
   const skipped: string[] = []
   const warnings: string[] = []
   const unresolved = new Map<string, UnresolvedLocaleRef>()
@@ -139,6 +139,7 @@ async function applyTranslations(
           } else {
             setNestedValue(data, key, value)
             applied.push(key)
+            writes.push({ locale: locale.code, key })
           }
         }
       })
@@ -163,11 +164,12 @@ async function applyTranslations(
     )
   }
 
-  const result: MutationResult = {
+  const result: MutationResult & { writes: AppliedWrite[] } = {
     applied: [...new Set(applied)],
     skipped: [...new Set(skipped)],
     warnings,
     filesWritten: filesWritten.size,
+    writes,
   }
 
   if (unresolved.size > 0) {
@@ -189,6 +191,12 @@ async function applyTranslations(
   return result
 }
 
+/** One locale/key pair a write actually put on disk. */
+interface AppliedWrite {
+  locale: string
+  key: string
+}
+
 /** The optional diagnostics every mutation result carries. */
 interface MutationDiagnostics {
   warnings?: string[]
@@ -200,7 +208,7 @@ interface MutationDiagnostics {
 /**
  * Copy the diagnostics off a MutationResult onto a public result, omitting the
  * empty ones so a clean run keeps its minimal shape. Centralised so the
- * write/add/update branches cannot drift apart on which of them they remember
+ * dry-run and write branches cannot drift apart on which of them they remember
  * to surface — they already had, before unresolvedLocales existed.
  */
 function attachDiagnostics<T extends MutationDiagnostics>(
@@ -254,99 +262,17 @@ export async function writeTranslations(opts: {
     return attachDiagnostics(result, mutation)
   }
 
+  // Post-write hook: a hand-written target value counts as translated from the
+  // source text now on disk, so the translation memory records it as such and
+  // does not report the key as outdated afterwards. No-op unless the project
+  // enabled the memory.
+  await recordWrittenTranslations({ config, projectDir: dir, layer, writes: mutation.writes })
+
   return attachDiagnostics({
     written: applied,
     skipped,
     filesWritten,
   } as WriteTranslationsResult, mutation)
-}
-
-/**
- * Add new translation keys to the specified layer.
- *
- * @deprecated Use writeTranslations with mode: 'add' instead.
- */
-export async function addTranslations(opts: {
-  layer: string
-  translations: Record<string, Record<string, string>>
-  dryRun?: boolean
-  projectDir?: string
-}): Promise<AddTranslationsResult> {
-  const { layer, translations } = opts
-  const dir = opts.projectDir ?? process.cwd()
-  const config = await detectI18nConfig(dir)
-  const isDryRun = opts.dryRun ?? false
-
-  const mutation = await applyTranslations(config, layer, translations, 'add', findLocaleImpl, isDryRun)
-  const { applied, skipped, filesWritten, preview } = mutation
-
-  if (isDryRun) {
-    const result: AddTranslationsResult = {
-      dryRun: true,
-      wouldAdd: preview,
-      skipped,
-      summary: {
-        keysToAdd: applied.length,
-        keysSkipped: skipped.length,
-        message: 'Call again with dryRun: false to apply these changes.',
-      },
-    }
-    if (skipped.length > 0) {
-      result.skippedKeys = skipped
-    }
-    return attachDiagnostics(result, mutation)
-  }
-
-  return attachDiagnostics({
-    added: applied,
-    skipped,
-    filesWritten,
-  } as AddTranslationsResult, mutation)
-}
-
-/**
- * Update existing translation keys in the specified layer.
- *
- * @deprecated Use writeTranslations with mode: 'update' instead.
- */
-export async function updateTranslations(opts: {
-  layer: string
-  translations: Record<string, Record<string, string>>
-  dryRun?: boolean
-  projectDir?: string
-}): Promise<UpdateTranslationsResult> {
-  const { layer, translations } = opts
-  const dir = opts.projectDir ?? process.cwd()
-  const config = await detectI18nConfig(dir)
-  const isDryRun = opts.dryRun ?? false
-
-  const mutation = await applyTranslations(config, layer, translations, 'update', findLocaleImpl, isDryRun)
-  const { applied, skipped, filesWritten, preview } = mutation
-
-  if (isDryRun) {
-    const result: UpdateTranslationsResult = {
-      dryRun: true,
-      wouldUpdate: preview,
-      skipped,
-      summary: {
-        keysToUpdate: applied.length,
-        keysSkipped: skipped.length,
-        message: 'Call again with dryRun: false to apply these changes.',
-      },
-    }
-    if (skipped.length > 0) {
-      result.skippedKeys = skipped
-    }
-    // warnings: false — updateTranslations has never surfaced them, and this
-    // deprecated wrapper is not the place to change its contract.
-    return attachDiagnostics(result, mutation, { warnings: false })
-  }
-
-  return attachDiagnostics({
-    updated: applied,
-    skipped,
-    filesWritten,
-  } as UpdateTranslationsResult, mutation, { warnings: false })
 }
 
 /**
@@ -420,7 +346,12 @@ export async function removeTranslations(opts: {
 }
 
 /**
- * Rename/move a translation key across ALL locale files in a layer.
+ * Rename a translation key across ALL locale files in one layer.
+ *
+ * Reachable on both surfaces through {@link moveTranslationKey}, which routes a
+ * same-layer request here. Kept exported because renaming within a layer is a
+ * complete operation on its own, and a programmatic caller that means exactly
+ * that should not have to express it as a move to nowhere.
  */
 export async function renameTranslationKey(opts: {
   layer: string
@@ -473,7 +404,7 @@ export async function renameTranslationKey(opts: {
   }
 
   if (isDryRun) {
-    const result: Record<string, unknown> = {
+    const result: RenameTranslationKeyResult = {
       dryRun: true,
       wouldRename: preview,
       summary: {
@@ -487,27 +418,35 @@ export async function renameTranslationKey(opts: {
     if (conflicts.length > 0) {
       result.conflictsInLocales = conflicts
       result.summary = {
-        ...(result.summary as Record<string, unknown>),
+        ...result.summary!,
         warning: `New key "${newKey}" already exists in ${conflicts.length} locale(s). These will be skipped.`,
       }
     }
     return result
   }
 
-  const summary: Record<string, unknown> = {
+  const result: RenameTranslationKeyResult = {
     renamed,
     filesWritten: filesWritten.size,
     oldKey,
     newKey,
+    summary: {
+      localesAffected: renamed.length,
+      message: `Renamed "${oldKey}" to "${newKey}" in ${renamed.length} locale(s).`,
+    },
   }
   if (notFoundArr.length > 0) {
-    summary.notFoundInLocales = notFoundArr
+    result.notFoundInLocales = notFoundArr
   }
   if (conflicts.length > 0) {
-    summary.skippedDueToConflict = conflicts
+    result.skippedDueToConflict = conflicts
+    result.summary = {
+      ...result.summary!,
+      warning: `New key "${newKey}" already existed in ${conflicts.length} locale(s), which were left untouched.`,
+    }
   }
 
-  return summary
+  return result
 }
 
 /**
@@ -540,7 +479,13 @@ export async function scaffoldLocaleFiles(opts: {
 }
 
 /**
- * Move a key from one layer to another, carrying every locale that defines it.
+ * Move a key: to another layer, to another key path, or both.
+ *
+ * One entry point rather than two, because the caller's intent is "this key
+ * belongs somewhere else" and whether that somewhere else is a different layer
+ * is a detail of the project's shape, not a different operation. Omitting
+ * `toLayer` (or naming the layer the key already lives in) is a rename within
+ * the layer and routes to {@link renameTranslationKey}.
  *
  * Promoting an app-layer key to the shared layer once a second app needs it is
  * a first-class operation in a layered monorepo, and composing it out of
@@ -561,23 +506,37 @@ export async function scaffoldLocaleFiles(opts: {
  * silently.
  */
 export async function moveTranslationKey(opts: {
-  fromLayer: string
-  toLayer: string
+  /** Layer the key lives in today. */
+  layer: string
   key: string
+  /** Layer to move it to. Omitted, or equal to `layer`, means a rename in place. */
+  toLayer?: string
   newKey?: string
   dryRun?: boolean
   projectDir?: string
-}): Promise<MoveTranslationKeyResult> {
-  const { fromLayer, toLayer, key } = opts
+}): Promise<MoveTranslationKeyOutcome> {
+  const { layer: fromLayer, key } = opts
   const targetKey = opts.newKey ?? key
-  const config = await detectI18nConfig(opts.projectDir ?? process.cwd())
 
-  if (fromLayer === toLayer) {
-    throw new ToolError(
-      `fromLayer and toLayer are both "${fromLayer}". To rename a key within one layer, use rename_translation_key.`,
-      'SAME_LAYER',
-    )
+  if (opts.toLayer === undefined || opts.toLayer === fromLayer) {
+    if (opts.newKey === undefined) {
+      throw new ToolError(
+        `Nothing to move: "${key}" would stay in "${fromLayer}" under the same name. `
+        + 'Pass toLayer to move it to another layer, newKey to rename it in place, or both.',
+        'NO_DESTINATION',
+      )
+    }
+    return renameTranslationKey({
+      layer: fromLayer,
+      oldKey: key,
+      newKey: opts.newKey,
+      dryRun: opts.dryRun,
+      projectDir: opts.projectDir,
+    })
   }
+
+  const toLayer = opts.toLayer
+  const config = await detectI18nConfig(opts.projectDir ?? process.cwd())
 
   // Both ends must be real, writable layers before anything is read: an alias
   // target would write into the layer it points at, silently landing the key

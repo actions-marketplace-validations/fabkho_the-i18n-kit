@@ -2,12 +2,11 @@
 
 // Core operations
 export {
+  describeProject,
   detectConfig,
   listLocaleDirs,
   getTranslations,
   writeTranslations,
-  addTranslations,
-  updateTranslations,
   getMissingTranslations,
   getTranslationStatus,
   findEmptyTranslations,
@@ -38,6 +37,27 @@ export type {
   CheckUndefinedKeysSummary,
 } from './core/operations.js'
 
+// The operation table both surfaces are built from. The MCP server registers
+// its tools from these; the CLI builds its commands from the same array.
+export { descriptors, descriptorsFor, visibleParams } from './surface/descriptors.js'
+// The file-diversion a surface applies to a large result. Operations return
+// their whole result; a caller that wants the { reportFile, summary } shape
+// asks for it the way the CLI and the server do.
+export { divertToReport } from './surface/report.js'
+export type {
+  AnyOperationDescriptor,
+  AnyReportSpec,
+  OperationContext,
+  OperationDescriptor,
+  ParamSpec,
+  ParamType,
+  Params,
+  ReportContext,
+  ReportSpec,
+  Surface,
+  TranslationsRecord,
+} from './surface/types.js'
+
 // Core types
 export * from './core/types.js'
 
@@ -61,7 +81,6 @@ export { readLocaleData } from './io/locale-data.js'
 
 // Errors
 export { ToolError, toErrorMessage } from './utils/errors.js'
-export { renameNotice } from './utils/rename-notice.js'
 
 // LLM providers
 export { createTranslateFn, TranslateProviderError, classifyProviderError, resolveProviderBaseUrl, BASE_URL_ENV } from './llm/providers.js'

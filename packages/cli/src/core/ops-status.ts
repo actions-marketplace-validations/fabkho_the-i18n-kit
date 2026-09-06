@@ -3,12 +3,12 @@
  */
 
 import { detectI18nConfig } from '../config/detector.js'
+import { buildLayerGraph } from '../config/layer-graph.js'
 import { readLocaleData, readLocaleDataIfPresent } from '../io/locale-data.js'
 import { getNestedValue, getLeafKeys } from '../io/key-operations.js'
-import { writeReportFile } from '../io/json-writer.js'
 import { findReferenceLocaleOrThrow, localeRefInfo, resolveLayersToScan } from './shared.js'
 import { resolveProtectedLocales } from './ops-translate.js'
-import { resolveOutputFile, resolveReportFilePath } from './report.js'
+import { collectEmptyTranslations } from './ops-read.js'
 import type { LocaleDefinition, LocaleDir, I18nConfig } from '../config/types.js'
 import type { TranslationStatusResult, LocaleStatus, LayerStatus } from './types.js'
 
@@ -78,8 +78,13 @@ function merge(into: Counts | undefined, from: Counts): void {
 export async function getTranslationStatus(opts: {
   layer?: string
   referenceLocale?: string
+  /**
+   * Also list the keys behind `summary.emptyKeys`, under `empty`. Off by
+   * default: the count is what a health check reads, and the list grows with
+   * the project.
+   */
+  listEmpty?: boolean
   projectDir?: string
-  outputFile?: string
 }): Promise<TranslationStatusResult> {
   const dir = opts.projectDir ?? process.cwd()
   const config = await detectI18nConfig(dir)
@@ -106,22 +111,38 @@ export async function getTranslationStatus(opts: {
     }
   })
 
+  // The layer graph already knows which apps declare which layers; a layer no
+  // app consumes holds keys nothing can render, which no other tool reports.
+  const graph = buildLayerGraph(config)
+
   const layers: LayerStatus[] = [...byLayer.entries()].map(([layer, c]) => ({
     layer,
     ...c,
     completion: percent(c.translated, c.total),
+    consumedBy: graph.appsUsingLayer(layer),
   }))
+
+  // With one app (what every single-locale-dir adapter builds) every layer is
+  // either that app's or nobody's, and "nobody's" is then an artefact of the
+  // config rather than a monorepo smell. Only flag it where apps compete.
+  const unconsumedLayers = (config.apps ?? []).length > 1
+    ? layers.filter(l => l.consumedBy.length === 0).map(l => l.layer)
+    : []
 
   const counted = locales.filter(l => !l.protected)
   const overallTranslated = counted.reduce((n, l) => n + l.translated, 0)
   const overallTotal = counted.reduce((n, l) => n + l.total, 0)
 
-  const output: TranslationStatusResult = {
+  return {
     locales,
     layers,
+    ...(opts.listEmpty
+      ? { empty: (await collectEmptyTranslations(config, { layer: opts.layer })).emptyKeys }
+      : {}),
     summary: {
       referenceLocale: localeRefInfo(refLocale),
       layersScanned: layersToScan.map(d => d.layer),
+      unconsumedLayers,
       localesChecked: counted.length,
       protectedLocales: locales.filter(l => l.protected).map(l => l.code),
       totalKeys: overallTotal,
@@ -132,20 +153,6 @@ export async function getTranslationStatus(opts: {
       completionPercent: percent(overallTranslated, overallTotal),
     },
   }
-
-  const reportPath = resolveOutputFile(dir, opts.outputFile)
-    ?? resolveReportFilePath(config, dir, 'get_translation_status')
-  if (reportPath) {
-    await writeReportFile(reportPath, output as unknown as Record<string, unknown>, {
-      tool: 'get_translation_status',
-      args: { layer: opts.layer, referenceLocale: opts.referenceLocale },
-    })
-    // Summary only: the per-locale and per-layer arrays grow with the project,
-    // and a health check must never flood a caller's context.
-    return { reportFile: reportPath, summary: output.summary }
-  }
-
-  return output
 }
 
 async function readTargetData(

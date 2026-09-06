@@ -39,7 +39,7 @@ Find missing keys, remove dead ones, and rename across every locale at once.
   :::u-page-feature
   ---
   icon: i-lucide-bot
-  to: /introduction/built-for-agents
+  to: /getting-started/agent-contract
   ---
   #title
   Built for agents
@@ -51,7 +51,7 @@ Find missing keys, remove dead ones, and rename across every locale at once.
   :::u-page-feature
   ---
   icon: i-lucide-network
-  to: /monorepos/layers
+  to: /monorepos/layers-and-consumer-graph
   ---
   #title
   Monorepo-aware
@@ -81,6 +81,6 @@ Find missing keys, remove dead ones, and rename across every locale at once.
   Reads your setup
 
   #description
-  Nuxt, Laravel, Vue, React and Next, or any JSON or PHP locale files.
+  Nuxt, Laravel, Vue, React and Next, or any JSON, YAML or PHP locale files.
   :::
 ::

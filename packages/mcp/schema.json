@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/fabkho/the-i18n-kit/main/packages/mcp/schema.json",
-  "title": "the-i18n-mcp project configuration",
+  "title": "the-i18n-kit project configuration",
   "description": "Configuration for the-i18n-kit. Declare it as i18n-kit.config.ts or .i18n-mcp.json at your project root — both accept this same shape. Every field is optional.",
   "type": "object",
   "properties": {
@@ -157,6 +157,41 @@
       "minLength": 1,
       "description": "Default locale code. Required for generic adapter activation."
     },
+    "apps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "App name, as it appears in orphan and status reports (e.g., 'shop', '@acme/admin')."
+          },
+          "layers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Layer names this app can render — its own layer plus every shared layer it consumes."
+          }
+        },
+        "required": [
+          "name",
+          "layers"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Which app consumes which layers — the consumer graph behind app-scoped orphan detection, misplaced-usage reports and unconsumed-layer warnings. Declaring it overrides both framework discovery and workspace inference."
+    },
+    "consumerGraph": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "off"
+      ],
+      "description": "Whether to infer the consumer graph from the package manager workspace and package.json dependencies when the framework provides no app information: 'auto' (default) infers it, 'off' keeps every layer in one app."
+    },
     "locales": {
       "type": "array",
       "items": {
@@ -186,20 +221,25 @@
           "description": "Custom directory path (relative to project root) where diagnostic tool reports are written."
         }
       ],
-      "description": "Enable file output for diagnostic tools (get_missing_translations, search_translations, find_orphan_keys, remove_orphan_keys). When set, each tool writes its full JSON report to <reportOutput>/<toolName>.json and returns only a summary in the MCP response. Set to true for the default '.i18n-reports/' directory, or a string for a custom path."
+      "description": "Enable file output for diagnostic tools (get_missing_translations, search_translations, find_orphan_keys, find_undefined_keys). When set, each tool writes its full JSON report to <reportOutput>/<toolName>.json and returns only a summary in the MCP response. Set to true for the default '.i18n-reports/' directory, or a string for a custom path."
     },
     "localeFileFormat": {
       "type": "string",
       "enum": [
         "json",
-        "php-array"
+        "php-array",
+        "yaml"
       ],
-      "description": "Override the auto-detected locale file format. Useful when both formats exist or auto-detection picks wrong."
+      "description": "Override the auto-detected locale file format. 'yaml' covers both .yaml and .yml files. Useful when several formats exist in one project or auto-detection picks wrong."
+    },
+    "translationMemory": {
+      "type": "boolean",
+      "description": "Write a translation memory to '.i18n-kit.lock.json' at the project root, recording per layer, key and target locale a hash of the source text each translation was made from, so later runs can tell targets that are still current from ones whose source has changed since. Off by default; no file is created until you enable it."
     },
     "providerBaseUrl": {
       "type": "string",
       "minLength": 1,
-      "description": "Base URL for the LLM provider — gateways, self-hosted model servers and corporate proxies that speak the provider's own protocol. Overrides the endpoint only, not the request shape or auth header. Overridden by the I18N_BASE_URL environment variable and by --baseUrl. Not supported by the \"google\" provider, which rejects it rather than ignoring it."
+      "description": "Base URL for the LLM provider — gateways, self-hosted model servers and corporate proxies that speak the provider's own protocol. Overrides the endpoint only, not the request shape or auth header. Overridden by the I18N_BASE_URL environment variable and by --baseUrl."
     },
     "samplingPreferences": {
       "deprecated": true,

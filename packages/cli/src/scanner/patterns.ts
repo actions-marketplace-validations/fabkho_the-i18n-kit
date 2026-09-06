@@ -20,6 +20,10 @@ export interface ScanPatternSet {
    * producing `${_}.header`-class candidates that suppress every key ending
    * in those segments. Language-neutral shapes (dotted literals,
    * trailing-dot prefixes) always run.
+   *
+   * Two-valued only because the two supported languages need two shape sets.
+   * A third frontend makes this a language identifier rather than a family
+   * flag — widen it then, and key it on the language the scanner is reading.
    */
   bareShapes?: 'js' | 'php'
 }
@@ -71,7 +75,15 @@ import { LARAVEL_PATTERNS } from './frontends/php/patterns.js'
 /**
  * Maps locale file format to the appropriate scan pattern set.
  * 'php-array' → Laravel (PHP translation helpers in Blade/PHP files).
- * 'json' / undefined → Vue/Nuxt ($t / t calls in Vue/TS/JS files).
+ * 'json' / 'yaml' / undefined → Vue/Nuxt ($t / t calls in Vue/TS/JS files).
+ *
+ * The locale-file format works as the key only while each format implies one
+ * source language — 'json' and 'yaml' mean JS/TS/Vue here purely by
+ * coincidence (a Rails project writes YAML and is not scanned by these
+ * patterns at all), and a third language frontend writing JSON or YAML breaks
+ * the mapping. Adding one means keying pattern sets on the language being
+ * scanned and having callers pass that; the format would then select the IO
+ * layer only.
  */
 export function getPatternSet(format?: LocaleFileFormat): ScanPatternSet {
   switch (format) {

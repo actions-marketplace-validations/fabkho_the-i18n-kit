@@ -2,9 +2,9 @@
 
 [![npm version](https://img.shields.io/npm/v/@the-i18n-kit/mcp?style=flat&colorA=18181b&colorB=4fc08d)](https://npmjs.com/package/@the-i18n-kit/mcp)
 [![npm downloads](https://img.shields.io/npm/dm/@the-i18n-kit/mcp?style=flat&colorA=18181b&colorB=4fc08d)](https://npmjs.com/package/@the-i18n-kit/mcp)
-[![License](https://img.shields.io/npm/l/the-i18n-mcp?style=flat&colorA=18181b&colorB=4fc08d)](https://github.com/fabkho/the-i18n-kit/blob/main/LICENSE)
+[![License](https://img.shields.io/npm/l/@the-i18n-kit/mcp?style=flat&colorA=18181b&colorB=4fc08d)](https://github.com/fabkho/the-i18n-kit/blob/main/LICENSE)
 
-MCP server for managing i18n translation files. Gives your agent 17 purpose-built
+MCP server for managing i18n translation files. Gives your agent 15 purpose-built
 tools so it can touch the keys it needs without reading whole locale files into
 context.
 
@@ -53,9 +53,9 @@ No install needed — your MCP host runs the server with `npx`.
 |---|---|
 | [Set up the server](https://fabkho.github.io/the-i18n-kit/getting-started/agent-setup) | Every host, and how to check it is working |
 | [Tools](https://fabkho.github.io/the-i18n-kit/reference/mcp) | Generated from the listing a host receives |
-| [Built for agents](https://fabkho.github.io/the-i18n-kit/introduction/built-for-agents) | Context discipline, classified failures, safe defaults |
+| [Agent contract](https://fabkho.github.io/the-i18n-kit/getting-started/agent-contract) | Exit codes, gates, failure reasons, output diversion, env vars |
 | [Configuration](https://fabkho.github.io/the-i18n-kit/configuration/where-config-lives) | Glossary, tone, protected locales — [every field](https://fabkho.github.io/the-i18n-kit/configuration/reference) |
-| [Monorepos and layers](https://fabkho.github.io/the-i18n-kit/monorepos/layers) | What the agent needs to know before deleting a key |
+| [Monorepos and layers](https://fabkho.github.io/the-i18n-kit/monorepos/layers-and-consumer-graph) | What the agent needs to know before deleting a key |
 
 [Translation modes](https://fabkho.github.io/the-i18n-kit/concepts/translation-modes)
 covers what happens with and without a provider configured — including that this
@@ -63,9 +63,8 @@ server returns fallback contexts for your agent rather than translating nothing.
 
 ## Migrating
 
-`the-i18n-mcp` was renamed to `@the-i18n-kit/mcp`. The old name still publishes
-during the deprecation window and the binary is unchanged; see
-[#344](https://github.com/fabkho/the-i18n-kit/issues/344).
+`the-i18n-mcp` was renamed to `@the-i18n-kit/mcp`. The old name is deprecated
+and receives no updates; the binary name is unchanged.
 
 ## License
 

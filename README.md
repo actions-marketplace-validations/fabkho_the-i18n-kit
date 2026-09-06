@@ -1,7 +1,7 @@
 # the-i18n-kit
 
 [![CI](https://github.com/fabkho/the-i18n-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/fabkho/the-i18n-kit/actions/workflows/ci.yml)
-[![License](https://img.shields.io/npm/l/the-i18n-mcp?style=flat&colorA=18181b&colorB=4fc08d)](https://github.com/fabkho/the-i18n-kit/blob/main/LICENSE)
+[![License](https://img.shields.io/npm/l/@the-i18n-kit/mcp?style=flat&colorA=18181b&colorB=4fc08d)](https://github.com/fabkho/the-i18n-kit/blob/main/LICENSE)
 [![Glama score](https://glama.ai/mcp/servers/fabkho/the-i18n-kit/badges/score.svg)](https://glama.ai/mcp/servers/fabkho/the-i18n-kit)
 
 **The i18n toolkit for AI agents and large monorepos.** Find missing keys, remove
@@ -58,7 +58,7 @@ cannot drift from it.
 | | |
 |---|---|
 | [Why this toolkit](https://fabkho.github.io/the-i18n-kit/introduction/why) | Who it is for, and who it is not |
-| [Monorepos and layers](https://fabkho.github.io/the-i18n-kit/monorepos/layers) | The consumer graph, shared libraries, misplaced usages |
+| [Monorepos and layers](https://fabkho.github.io/the-i18n-kit/monorepos/layers-and-consumer-graph) | The consumer graph, shared libraries, misplaced usages |
 | [Frameworks](https://fabkho.github.io/the-i18n-kit/frameworks/detection) | Nuxt, Laravel, Vue, React/Next, generic |
 | [Configuration](https://fabkho.github.io/the-i18n-kit/configuration/where-config-lives) | Where it lives, precedence, every field |
 | [CI/CD](https://fabkho.github.io/the-i18n-kit/ci-cd/github-actions) | The Action and the GitLab template |

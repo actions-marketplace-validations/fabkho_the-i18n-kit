@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os'
 import { createMcpHandler, InMemoryTransport } from '@modelcontextprotocol/server'
 import type { McpHttpHandler, McpServer } from '@modelcontextprotocol/server'
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
-import { clearConfigCache } from 'the-i18n-cli'
-import type { TranslateFn } from 'the-i18n-cli'
+import { clearConfigCache } from '@the-i18n-kit/cli'
+import type { TranslateFn } from '@the-i18n-kit/cli'
 
 /**
  * Transport-level tests: a linked client/server pair over the SDK's in-memory
@@ -99,7 +99,6 @@ describe('the-i18n-mcp server over in-memory transport', () => {
     expect(names).toEqual([
       'discover',
       'find_duplicate_keys',
-      'find_empty_translations',
       'find_orphan_keys',
       'find_undefined_keys',
       'get_missing_translations',
@@ -107,15 +106,55 @@ describe('the-i18n-mcp server over in-memory transport', () => {
       'get_translations',
       'list_namespaces',
       'move_translation_key',
-      'remove_orphan_keys',
       'remove_translations',
-      'rename_translation_key',
       'scaffold_locale',
       'search_translations',
       'translate_key',
       'translate_missing',
       'write_translations',
     ])
+  })
+
+  /**
+   * Every advertised tool, called through the transport with the smallest
+   * argument set its schema accepts.
+   *
+   * Most of the suite below drives the tools whose behaviour is interesting,
+   * which left a third of the surface advertised but never once invoked — a
+   * handler that throws on its own happy path would ship. Each case gets its
+   * own project so the mutating ones cannot decide what the next one sees.
+   */
+  const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
+    'discover': {},
+    'list_namespaces': {},
+    'get_translations': { layer: 'root', locale: 'de', keys: ['greeting'] },
+    'write_translations': { layer: 'root', translations: { 'actions.undo': { de: 'Rückgängig' } } },
+    'get_missing_translations': {},
+    'get_translation_status': {},
+    'search_translations': { query: 'Hallo' },
+    'remove_translations': { layer: 'root', keys: ['actions.save'] },
+    'move_translation_key': { layer: 'root', key: 'greeting', newKey: 'common.greeting' },
+    'translate_missing': {},
+    'translate_key': { layer: 'root', key: 'greeting', sourceLocale: 'de' },
+    'find_undefined_keys': {},
+    'find_orphan_keys': {},
+    'find_duplicate_keys': {},
+    'scaffold_locale': {},
+  }
+
+  it('advertises no tool the smoke table has forgotten', async () => {
+    const { tools } = await client.listTools()
+    expect(tools.map(t => t.name).sort()).toEqual(Object.keys(MINIMAL_ARGS).sort())
+  })
+
+  it.each(Object.entries(MINIMAL_ARGS))('%s answers a minimal call', async (name, args) => {
+    const dir = await makeProject()
+    try {
+      const { result, text } = await callTool(name, { ...args, projectDir: dir })
+      expect(result.isError, `${name}: ${text}`).not.toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   it('exposes no sampling wording in the translate tool descriptions', async () => {
@@ -131,46 +170,6 @@ describe('the-i18n-mcp server over in-memory transport', () => {
     const result = await client.readResource({ uri: 'i18n:///root/de' })
     const content = result.contents[0] as { text: string }
     expect(JSON.parse(content.text)).toMatchObject({ greeting: 'Hallo {name}' })
-  })
-
-  // With the flag at module scope, two servers in one process raced for a
-  // single delivery: whichever called second never announced itself. Interleaved
-  // rather than sequential, because sequential passes either way.
-  it('gives each server its own notice, interleaved', async () => {
-    // Imported here for the same reason as the shared client above: the server
-    // reads its default project dir from the environment at module load.
-    const { createServer } = await import('../src/server.js')
-    const [a, b] = await Promise.all([
-      connectClient(await createServer()),
-      connectClient(await createServer()),
-    ])
-
-    try {
-      const firstA = await callToolOn(a, 'discover', { projectDir })
-      const firstB = await callToolOn(b, 'discover', { projectDir })
-      const secondA = await callToolOn(a, 'discover', { projectDir })
-      const secondB = await callToolOn(b, 'discover', { projectDir })
-
-      expect(firstA.json?._notice).toContain('@the-i18n-kit/mcp')
-      expect(firstB.json?._notice).toContain('@the-i18n-kit/mcp')
-      expect(secondA.json).not.toHaveProperty('_notice')
-      expect(secondB.json).not.toHaveProperty('_notice')
-    }
-    finally {
-      await Promise.all([a.close(), b.close()])
-    }
-  })
-
-  it('carries the rename notice on the first tool result and no later one', async () => {
-    // An editor spawns this server through npx, so an install-time deprecation
-    // is printed where nobody reads it. The notice has to reach the model at
-    // runtime — once, because repeating it on every call costs context on each
-    // one and teaches the model to skip it (#315).
-    const first = await callTool('discover', { projectDir })
-    const second = await callTool('discover', { projectDir })
-
-    expect(first.json?._notice).toContain('@the-i18n-kit/mcp')
-    expect(second.json).not.toHaveProperty('_notice')
   })
 
   // The flat layer list discover returned could not answer where a new key
@@ -189,27 +188,30 @@ describe('the-i18n-mcp server over in-memory transport', () => {
     expect(json?.layerGraph.aliases).toBeInstanceOf(Object)
   })
 
-  it('find_empty_translations reports a key that exists but has no value', async () => {
-    // Empty values are not missing keys — they are present in the file and
-    // render as nothing, which is why they need a report of their own.
+  // Empty values are not missing keys — they are present in the file and
+  // render as nothing, so the coverage report counts them separately, and
+  // listEmpty names the keys behind that count.
+  it('get_translation_status lists the keys that exist but have no value', async () => {
     const dir = await makeProject()
     await writeFile(join(dir, 'i18n', 'locales', 'en.json'), JSON.stringify({
       greeting: '',
       actions: { save: 'Save' },
     }))
 
-    const { json } = await callTool('find_empty_translations', { projectDir: dir })
+    const { json } = await callTool('get_translation_status', { projectDir: dir, listEmpty: true })
 
-    expect(json?.summary).toMatchObject({ totalEmpty: 1 })
+    expect(json?.summary.emptyKeys).toBe(1)
+    expect(json?.empty).toEqual({ en: { root: ['greeting'] } })
   })
 
-  it('find_empty_translations narrows to one locale when asked', async () => {
+  it('get_translation_status counts empty values without listing them by default', async () => {
     const dir = await makeProject()
     await writeFile(join(dir, 'i18n', 'locales', 'en.json'), JSON.stringify({ greeting: '' }))
 
-    const { json } = await callTool('find_empty_translations', { projectDir: dir, locale: 'de' })
+    const { json } = await callTool('get_translation_status', { projectDir: dir })
 
-    expect(json?.summary).toMatchObject({ totalEmpty: 0 })
+    expect(json?.summary.emptyKeys).toBe(1)
+    expect(json).not.toHaveProperty('empty')
   })
 
   it('discover returns the project configuration and the agent translation mode', async () => {
@@ -327,6 +329,21 @@ describe('the-i18n-mcp server over in-memory transport', () => {
     expect(json?.layers).toBeDefined()
   })
 
+  // The diversion is the registrar's, not the operation's: the tool handler
+  // applies it to whatever the operation returned.
+  it('get_missing_translations writes the full result to outputFile and returns the summary', async () => {
+    const outputFile = join(projectDir, 'missing.json')
+    const { json } = await callTool('get_missing_translations', { projectDir, outputFile })
+
+    expect(Object.keys(json ?? {}).sort()).toEqual(['reportFile', 'summary'])
+    expect(json?.reportFile).toBe(outputFile)
+    expect(json?.summary.totalMissingKeys).toBeGreaterThan(0)
+
+    const report = JSON.parse(await readFile(outputFile, 'utf-8')) as Record<string, unknown>
+    expect(report.tool).toBe('get_missing_translations')
+    expect(report.missing).toBeDefined()
+  })
+
   it('get_translation_status marks protected locales as excluded', async () => {
     const dir = await makeProject({ protectedLocales: ['en'] })
     const { json } = await callTool('get_translation_status', { projectDir: dir })
@@ -417,7 +434,7 @@ describe('the-i18n-mcp server over in-memory transport', () => {
       }))
 
       const { json } = await callTool('move_translation_key', {
-        fromLayer: 'app-admin',
+        layer: 'app-admin',
         toLayer: 'root',
         key: 'admin.dashboard.title',
         newKey: 'common.dashboard.title',
@@ -432,6 +449,82 @@ describe('the-i18n-mcp server over in-memory transport', () => {
         .toEqual({})
     } finally {
       await rm(twoLayer, { recursive: true, force: true })
+    }
+  })
+
+  // The same tool without a toLayer, which is the half that used to be a tool
+  // of its own — an agent had to know which of the two to reach for before it
+  // knew whether the key was changing layers.
+  it('move_translation_key renames in place when no other layer is named', async () => {
+    const dir = await makeProject()
+    try {
+      const { json } = await callTool('move_translation_key', {
+        layer: 'root',
+        key: 'actions.save',
+        newKey: 'actions.store',
+        projectDir: dir,
+      })
+
+      expect(json?.renamed).toEqual(['de'])
+      expect(JSON.parse(await readFile(join(dir, 'i18n/locales/de.json'), 'utf-8')))
+        .toMatchObject({ actions: { store: 'Speichern' } })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  // Without `remove` the tool is a report, and that has to hold through the
+  // transport rather than only in the core defaults.
+  it('find_orphan_keys deletes nothing unless remove is set', async () => {
+    const dir = await makeProject()
+    try {
+      const before = await readFile(join(dir, 'i18n/locales/de.json'), 'utf-8')
+      const { json } = await callTool('find_orphan_keys', { projectDir: dir })
+
+      expect(json?.summary.orphanCount).toBe(2)
+      expect(json?.removed).toBeUndefined()
+      expect(await readFile(join(dir, 'i18n/locales/de.json'), 'utf-8')).toBe(before)
+
+      const removal = await callTool('find_orphan_keys', { projectDir: dir, remove: true })
+      expect(removal.json?.summary).toMatchObject({ dryRun: false, removedCount: 2 })
+      expect(JSON.parse(await readFile(join(dir, 'i18n/locales/de.json'), 'utf-8'))).toEqual({})
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  /**
+   * The scan reads every source file of every app, which is many seconds on a
+   * monorepo. A caller that passes a progress token gets told where it is —
+   * and, because the reporter counts the notifications it sends, the last one
+   * has to land exactly on the total announced before the first.
+   */
+  it('find_orphan_keys reports progress against a total set before the first notification', async () => {
+    const dir = await makeProject()
+    try {
+      await mkdir(join(dir, 'components'), { recursive: true })
+      for (let i = 0; i < 6; i++) {
+        await writeFile(join(dir, `components/C${i}.vue`), `{{ $t('greeting') }}`)
+      }
+
+      const notifications: Array<{ progress: number, total?: number, message?: string }> = []
+      const result = await client.callTool(
+        { name: 'find_orphan_keys', arguments: { projectDir: dir } },
+        { onprogress: p => void notifications.push({ progress: p.progress, total: p.total, message: p.message }) },
+      )
+      const json = JSON.parse((result.content as Array<{ text: string }>)[0]!.text) as Record<string, any>
+
+      expect(result.isError).toBeFalsy()
+      expect(notifications.length).toBeGreaterThan(0)
+      // A notification sent before onProgressTotal would carry no total at all.
+      const total = notifications[0]?.total
+      expect(total).toBe(json.summary.filesScanned)
+      expect(notifications.every(n => n.total === total)).toBe(true)
+      expect(notifications.map(n => n.progress)).toEqual([...Array(total).keys()].map(i => i + 1))
+      // Where the scan is, not just how far along it is.
+      expect(notifications.at(-1)?.message).toContain('.vue')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
     }
   })
 

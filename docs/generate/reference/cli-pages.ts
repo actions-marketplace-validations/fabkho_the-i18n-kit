@@ -44,13 +44,11 @@ function renderOverview(
     }),
     GENERATED_NOTICE,
     '# CLI Commands',
-    `Every command ${code(PACKAGE)} registers is listed below and documented on its own page. This page carries what is true of all of them: the flags they share, the exit code each one sets, and the gates that make one fail a build on findings.`,
-    `The command pages are generated from the command definitions, so a flag that no longer exists cannot appear on one.`,
+    `Every command ${code(PACKAGE)} registers is listed below and documented on its own page. Every one of them accepts the [shared flags](#shared-flags) and sets one of the [exit codes](#exit-codes) below, so the command pages carry only what is distinctive about each.`,
     '## Commands',
     commandTable(commands),
     ...aliasSection(commands),
     '## Shared Flags',
-    `The shared command factory merges these into every command, so they are documented once here rather than repeated on every command page.`,
     argTable(shared),
     '## Flag Name Forms',
     `Flags are declared in camel case and print that way in ${code(`${BINARY} <command> --help`)}, which is the form used throughout this reference. citty registers the kebab-case form as an alias, so ${code('--dryRun')} and ${code('--dry-run')} are the same flag.`,
@@ -144,7 +142,6 @@ function renderCommand(command: CommandDoc, shared: ArgDoc[]): string {
     '## Flags',
     ...flagsSection(command, specific),
     ...commandAliasNote(command),
-    ...footer(),
   ])
 }
 
@@ -171,12 +168,6 @@ function commandAliasNote(command: CommandDoc): string[] {
   return ['## Other Names', `${names} runs this same command with the same flags. ${reasons}`]
 }
 
-function footer(): string[] {
-  return [
-    `Every command accepts the [shared flags](${ROUTE}#shared-flags) and sets one of the [exit codes](${ROUTE}#exit-codes) documented on the overview.`,
-  ]
-}
-
 // ---------------------------------------------------------------------------
 // Flag table
 // ---------------------------------------------------------------------------
@@ -193,13 +184,18 @@ function argTable(args: ArgDoc[]): string {
 }
 
 /**
- * The flag, its accepted values where the definition hints at them, and its
- * short aliases — the same form `--help` prints.
+ * The flag, its accepted values where the definition hints at them, and the
+ * other spellings that reach it.
+ *
+ * A one-character alias is a short flag (`-d`); a longer one is a long flag
+ * (`--ref`), which is what a flag renamed to match its MCP parameter keeps
+ * working under. citty's own usage text prints every alias with a single dash,
+ * so following it here would document a form the parser never accepts.
  */
 function flagNames(arg: ArgDoc): string {
   const hint = arg.valueHint === undefined ? '' : `=<${arg.valueHint}>`
-  const short = arg.alias.map(alias => code(`-${alias}`))
-  return [code(cell(`--${arg.name}${hint}`)), ...short].join(', ')
+  const aliases = arg.alias.map(alias => code(alias.length === 1 ? `-${alias}` : `--${alias}`))
+  return [code(cell(`--${arg.name}${hint}`)), ...aliases].join(', ')
 }
 
 function formatDefault(arg: ArgDoc): string {

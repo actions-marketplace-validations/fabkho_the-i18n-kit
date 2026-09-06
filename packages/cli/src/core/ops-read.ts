@@ -1,20 +1,55 @@
 /**
- * Read-only operations: config detection, locale-dir listing, translation
- * lookup/search, missing/empty detection, and namespace browsing.
+ * Read-only operations: project discovery, config detection, locale-dir
+ * listing, translation lookup/search, missing/empty detection, and namespace
+ * browsing.
  */
 
 import { readdir } from 'node:fs/promises'
 
 import { detectI18nConfig, clearConfigCache } from '../config/detector.js'
+import { serializeLayerGraph } from '../config/layer-graph.js'
 import type { I18nConfig } from '../config/types.js'
-import { writeReportFile } from '../io/json-writer.js'
 import { readLocaleData, readLocaleDataIfPresent, resolveLocaleEntries } from '../io/locale-data.js'
+import { getFormat } from '../io/formats.js'
 import { getNestedValue, getLeafKeys } from '../io/key-operations.js'
 import { ToolError } from '../utils/errors.js'
 
-import type { LocaleDirInfo, SearchMatch, MissingTranslationsResult, EmptyTranslationsResult } from './types.js'
+import type {
+  DescribeProjectResult,
+  LocaleDirInfo,
+  MissingTranslationsResult,
+  EmptyTranslationsResult,
+  SearchMatch,
+  SearchTranslationsResult,
+} from './types.js'
 import { findLayerOrThrow, findReferenceLocaleOrThrow, findLocaleImpl, localeRefInfo, resolveLayersToScan } from './shared.js'
-import { resolveOutputFile, resolveReportFilePath } from './report.js'
+import { resolveProtectedLocales } from './ops-translate.js'
+
+/**
+ * Everything a caller needs to know about a project before touching it:
+ * resolved config, locale directories, the layer topology, and which locales
+ * are hand-maintained.
+ *
+ * This composition used to live in the MCP `discover` handler, so the terminal
+ * had no way to ask the question its own docs told people to ask — and the two
+ * surfaces would have had to be kept in step by hand once one of them grew a
+ * field. Callers add whatever is theirs alone (the MCP server adds the
+ * translation backend it resolved at startup); the project half is here.
+ */
+export async function describeProject(opts: {
+  projectDir?: string
+} = {}): Promise<DescribeProjectResult> {
+  // detectConfig first: it warms the config cache listLocaleDirs reuses.
+  const config = await detectConfig(opts.projectDir)
+  const layers = await listLocaleDirs(opts.projectDir)
+
+  return {
+    ...config,
+    protectedLocales: resolveProtectedLocales(config).map(l => l.code),
+    layers,
+    layerGraph: serializeLayerGraph(config),
+  }
+}
 
 /**
  * Detect the i18n configuration from the project, always bypassing the
@@ -32,6 +67,7 @@ export async function detectConfig(projectDir?: string): Promise<I18nConfig> {
 export async function listLocaleDirs(projectDir?: string): Promise<LocaleDirInfo[]> {
   const dir = projectDir ?? process.cwd()
   const config = await detectI18nConfig(dir)
+  const format = getFormat(config.localeFileFormat)
 
   const results: LocaleDirInfo[] = []
 
@@ -47,7 +83,9 @@ export async function listLocaleDirs(projectDir?: string): Promise<LocaleDirInfo
       continue
     }
 
-    if (config.localeFileFormat === 'php-array') {
+    // A namespaced layout counts directories and reports the namespaces in
+    // one; a flat one counts locale files and reports the keys in one.
+    if (format.defaultLayout === 'namespaced') {
       let subDirs: string[] = []
       try { subDirs = await readdir(localeDir.path) } catch {}
 
@@ -68,11 +106,11 @@ export async function listLocaleDirs(projectDir?: string): Promise<LocaleDirInfo
       })
     } else {
       const files = await readdir(localeDir.path)
-      const jsonFiles = files.filter(f => f.endsWith('.json'))
+      const localeFiles = files.filter(f => format.extensions.some(ext => f.toLowerCase().endsWith(ext)))
 
       let topLevelKeys: string[] = []
       const sampleLocale = config.locales[0]
-      if (sampleLocale !== undefined && jsonFiles.length > 0) {
+      if (sampleLocale !== undefined && localeFiles.length > 0) {
         try {
           const data = await readLocaleData(config, localeDir.layer, sampleLocale)
           topLevelKeys = Object.keys(data)
@@ -82,7 +120,7 @@ export async function listLocaleDirs(projectDir?: string): Promise<LocaleDirInfo
       results.push({
         layer: localeDir.layer,
         path: localeDir.path,
-        fileCount: jsonFiles.length,
+        fileCount: localeFiles.length,
         topLevelKeys,
       })
     }
@@ -165,7 +203,6 @@ export async function getMissingTranslations(opts: {
   targetLocales?: string[]
   locales?: string[]
   projectDir?: string
-  outputFile?: string
 }): Promise<MissingTranslationsResult> {
   const { layer } = opts
   const dir = opts.projectDir ?? process.cwd()
@@ -218,7 +255,7 @@ export async function getMissingTranslations(opts: {
     }
   }
 
-  const output = {
+  return {
     missing: result,
     summary: {
       referenceLocale: localeRefInfo(refLocale),
@@ -227,17 +264,6 @@ export async function getMissingTranslations(opts: {
       totalMissingKeys: totalMissing,
     },
   }
-
-  const reportPath = resolveOutputFile(dir, opts.outputFile) ?? resolveReportFilePath(config, dir, 'get_missing_translations')
-  if (reportPath) {
-    await writeReportFile(reportPath, output, {
-      tool: 'get_missing_translations',
-      args: { layer, referenceLocale: opts.referenceLocale, targetLocales: opts.targetLocales },
-    })
-    return { reportFile: reportPath, summary: output.summary }
-  }
-
-  return output
 }
 
 /**
@@ -247,11 +273,29 @@ export async function findEmptyTranslations(opts: {
   layer?: string
   locale?: string
   projectDir?: string
-  outputFile?: string
 }): Promise<EmptyTranslationsResult> {
   const { layer, locale } = opts
   const dir = opts.projectDir ?? process.cwd()
   const config = await detectI18nConfig(dir)
+
+  return collectEmptyTranslations(config, { layer, locale })
+}
+
+/**
+ * The scan behind {@link findEmptyTranslations}, against a config the caller
+ * already has.
+ *
+ * Separate so `getTranslationStatus` can embed the listing under its own
+ * `--list-empty` flag without detecting the project a second time.
+ */
+export async function collectEmptyTranslations(
+  config: I18nConfig,
+  opts: { layer?: string, locale?: string },
+): Promise<{
+  emptyKeys: Record<string, Record<string, string[]>>
+  summary: { totalEmpty: number, localesChecked: string[], layersChecked: string[] }
+}> {
+  const { layer, locale } = opts
 
   const localesToCheck = locale
     ? (() => {
@@ -295,7 +339,7 @@ export async function findEmptyTranslations(opts: {
     }
   }
 
-  const output = {
+  return {
     emptyKeys,
     summary: {
       totalEmpty,
@@ -303,17 +347,6 @@ export async function findEmptyTranslations(opts: {
       layersChecked: layersToScan.map(d => d.layer),
     },
   }
-
-  const reportPath = resolveOutputFile(dir, opts.outputFile) ?? resolveReportFilePath(config, dir, 'find_empty_translations')
-  if (reportPath) {
-    await writeReportFile(reportPath, output, {
-      tool: 'find_empty_translations',
-      args: { layer, locale },
-    })
-    return { reportFile: reportPath, summary: output.summary }
-  }
-
-  return output
 }
 
 /**
@@ -325,9 +358,8 @@ export async function searchTranslations(opts: {
   layer?: string
   locale?: string
   projectDir?: string
-  outputFile?: string
-}): Promise<{ matches: SearchMatch[]; totalMatches: number } | { reportFile: string; summary: { totalMatches: number } }> {
-  const { query, layer, locale, outputFile } = opts
+}): Promise<SearchTranslationsResult> {
+  const { query, layer, locale } = opts
   const dir = opts.projectDir ?? process.cwd()
   const config = await detectI18nConfig(dir)
 
@@ -342,7 +374,7 @@ export async function searchTranslations(opts: {
     if (layer && layer !== '*') {
       findLayerOrThrow(config, layer)
     }
-    throw new ToolError('No locale directories found. Run detect_i18n_config to verify the project setup.', 'LAYER_NOT_FOUND')
+    throw new ToolError('No locale directories found. Run discover to verify the project setup.', 'LAYER_NOT_FOUND')
   }
 
   const localesToSearch = locale
@@ -387,18 +419,7 @@ export async function searchTranslations(opts: {
     }
   }
 
-  const output = { matches, totalMatches: matches.length }
-
-  const reportPath = resolveOutputFile(dir, outputFile) ?? resolveReportFilePath(config, dir, 'search_translations')
-  if (reportPath) {
-    await writeReportFile(reportPath, output, {
-      tool: 'search_translations',
-      args: { query, searchIn: opts.searchIn, layer, locale },
-    })
-    return { reportFile: reportPath, summary: { totalMatches: matches.length } }
-  }
-
-  return output
+  return { matches, totalMatches: matches.length }
 }
 
 // ─── list_namespaces ────────────────────────────────────────────
