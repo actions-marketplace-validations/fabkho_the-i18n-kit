@@ -16,7 +16,13 @@ import { BASE_URL_ENV } from '../llm/providers.js'
 // The two mappings a report can carry. Imported outright rather than per run
 // like the operations below: they are pure transforms over a result, with
 // nothing behind them but a hash and a path join.
-import { orphanResultToCodeQuality, undefinedKeysToCodeQuality } from '../core/codequality.js'
+import {
+  duplicateKeysToCodeQuality,
+  missingTranslationsToCodeQuality,
+  orphanResultToCodeQuality,
+  statusToCodeQuality,
+  undefinedKeysToCodeQuality,
+} from '../core/codequality.js'
 // The result types the report builders below are written against. Type-only,
 // so the core barrel is still not loaded to print usage text.
 import type { CheckUndefinedKeysResult } from '../core/ops-check.js'
@@ -284,8 +290,15 @@ export const descriptors: readonly AnyOperationDescriptor[] = [
     gates: [{ flag: 'failOnMissing', counter: 'totalMissingKeys', threshold: 0 }],
     report: {
       name: 'get_missing_translations',
-      outputFile: { example: '/tmp/missing-translations.json' },
+      outputFile: { example: '.i18n-reports/missing-translations.json' },
       summary: (result: MissingTranslationsResult) => result.summary,
+      codequality: {
+        findings: 'missing translations',
+        issues: (result: MissingTranslationsResult, ctx) => missingTranslationsToCodeQuality(result, {
+          config: ctx.config,
+          projectDir: ctx.projectDir,
+        }),
+      },
     },
     async run(args) {
       const { getMissingTranslations } = await core()
@@ -310,7 +323,7 @@ export const descriptors: readonly AnyOperationDescriptor[] = [
       listEmpty: {
         type: 'boolean',
         default: false,
-        description: 'Also list the keys whose value is an empty string, under "empty", by locale and layer — useful after a scaffold or an interrupted translation run. Default: false, which returns counts only.',
+        description: 'Also list the keys behind summary.emptyKeys under "empty" (locale → layer → keys), and keys that are empty in the reference locale itself under "emptyInReference" — useful after a scaffold or an interrupted translation run. Default: false, which returns counts only.',
       },
       failUnder: {
         type: 'number',
@@ -323,10 +336,20 @@ export const descriptors: readonly AnyOperationDescriptor[] = [
     gates: [{ flag: 'failUnder', counter: 'completionPercent', direction: 'below' }],
     report: {
       name: 'get_translation_status',
-      outputFile: { example: '/tmp/translation-status.json' },
+      outputFile: { example: '.i18n-reports/translation-status.json' },
       // Summary only: the per-locale and per-layer arrays grow with the
       // project, and a health check must never flood a caller's context.
       summary: (result: TranslationStatusResult) => result.summary,
+      codequality: {
+        findings: 'incomplete locales and unconsumed layers',
+        // The gate's threshold is the report's threshold: a pipeline that asks
+        // to fail under 90% should not see a finding for every locale at 97%.
+        issues: (result: TranslationStatusResult, ctx) => statusToCodeQuality(result, {
+          config: ctx.config,
+          projectDir: ctx.projectDir,
+          failUnder: ctx.args.failUnder,
+        }),
+      },
     },
     async run(args) {
       const { getTranslationStatus } = await core()
@@ -343,13 +366,13 @@ export const descriptors: readonly AnyOperationDescriptor[] = [
     id: 'search',
     cli: { name: 'search' },
     mcp: { name: 'search_translations', title: 'Search Translations' },
-    description: 'Search translation files by key path or value. A case-insensitive substring match — not fuzzy, not a regular expression.',
-    longDescription: 'Useful for finding an existing translation before adding a duplicate of it.',
+    description: 'Search translation files by key path or value, one compact row per matching key rather than one per key and locale.',
+    longDescription: 'Useful for finding an existing translation before adding a duplicate of it. A key that seven layers and thirty locales define comes back as a single row: layers names every layer that defines it, which is what tells reuse from duplication, and value is the one the reference locale holds. Pass includeLocales for the detail rows — one per key and locale — when what each locale holds is the question. Matching is a case-insensitive substring unless matchMode says otherwise.',
     params: {
       query: {
         type: 'string',
         required: true,
-        description: 'Substring to search for, matched against keys and/or values. Case-insensitive. Example: "save" matches the key "common.actions.save" and the value "Save changes".',
+        description: 'Text to search for, matched against keys and/or values. Compared as a case-insensitive substring unless matchMode says otherwise. Example: "save" matches the key "common.actions.save" and the value "Save changes".',
       },
       searchIn: {
         type: 'string',
@@ -359,6 +382,12 @@ export const descriptors: readonly AnyOperationDescriptor[] = [
         // `--in` was the CLI spelling before the two surfaces agreed.
         cli: { alias: 'in' },
       },
+      matchMode: {
+        type: 'string',
+        enum: ['contains', 'exact', 'fuzzy'],
+        default: 'contains',
+        description: 'How query is compared. "contains" is a case-insensitive substring, over every locale searched. "exact" is the whole string, and "fuzzy" also accepts near-misses in wording, both ignoring case, accents, punctuation and whitespace and both comparing against one locale only — locale when given, otherwise the project default. Default: "contains".',
+      },
       layer: {
         ...layerFilter,
         description: 'Layer name to search in (e.g., "root", "app-admin"), or "*" for all layers. If omitted, searches every layer.',
@@ -367,11 +396,16 @@ export const descriptors: readonly AnyOperationDescriptor[] = [
         type: 'string',
         description: 'Locale code to search in (e.g., "en", "de"). If omitted, searches every locale.',
       },
+      includeLocales: {
+        type: 'boolean',
+        default: false,
+        description: 'Return one row per key and locale — layer, locale, key, value — instead of one row per key. Several times the output for the same findings, so ask for it when the per-locale values are what you are after. Default: false.',
+      },
     },
     report: {
       name: 'search_translations',
       outputFile: {
-        example: '/tmp/search-results.json',
+        example: '.i18n-reports/search-results.json',
         // The only read operation the CLI never gave a report path to. Left as
         // it was rather than quietly growing the command's surface.
         cli: { hidden: true },
@@ -385,6 +419,8 @@ export const descriptors: readonly AnyOperationDescriptor[] = [
       return searchTranslations({
         query: args.query,
         searchIn: args.searchIn,
+        matchMode: args.matchMode,
+        includeLocales: args.includeLocales,
         layer: args.layer,
         locale: args.locale,
         projectDir: args.projectDir,
@@ -496,6 +532,11 @@ export const descriptors: readonly AnyOperationDescriptor[] = [
         min: 1,
         description: 'Maximum number of keys per provider request. Default: 50. A lower value reduces per-batch risk and increases round trips.',
       },
+      overwriteStale: {
+        type: 'boolean',
+        default: false,
+        description: 'Also re-translate keys whose target value was written from source text that has changed since. Requires translationMemory in the project config — without it nothing is known to be stale and this changes nothing. Default: false, which reports those keys under "stale" and leaves their values alone.',
+      },
       dryRun: dryRun('Return which keys would be translated without calling the provider or writing files. Default: false.'),
       compact: {
         type: 'boolean',
@@ -527,6 +568,7 @@ export const descriptors: readonly AnyOperationDescriptor[] = [
         targetLocales: args.targetLocales,
         keys: args.keys,
         batchSize: args.batchSize,
+        overwriteStale: args.overwriteStale,
         dryRun: args.dryRun,
         compact: args.compact,
         projectDir: args.projectDir,
@@ -612,11 +654,20 @@ export const descriptors: readonly AnyOperationDescriptor[] = [
     cli: { name: 'check' },
     mcp: { name: 'find_undefined_keys', title: 'Find Used-But-Undefined Translation Keys' },
     description: 'Find keys referenced in source code but defined in NO locale layer the using app consumes — the direction that ships raw keys to production.',
-    longDescription: 'The inverse of find_orphan_keys. Scope-aware: each scan unit (app) is checked against the layers it consumes (summary.searchedLayersByApp), so a key defined only in a layer the using app does not consume is still undefined for that app. Known limitation: extraction is line-based and static — dynamically built keys (template literals, concatenation) cannot be verified and are reported as uncertainKeys, never as hard findings.',
+    longDescription: 'The inverse of find_orphan_keys. Scope-aware: each scan unit (app) is checked against the layers it consumes (summary.searchedLayersByApp), so a key defined only in a layer the using app does not consume is still undefined for that app. Known limitation: extraction is line-based and static — dynamically built keys (template literals, concatenation) cannot be verified and are reported as uncertainKeys, never as hard findings. With write, the hard findings are also added to a locale file as empty translations, which is the first half of the fix; uncertain findings are never written.',
     params: {
       locale: {
         ...readLocale,
         description: 'Reference locale to resolve key definitions in (e.g., "en", "en-US"). Defaults to the project default locale.',
+      },
+      write: {
+        type: 'boolean',
+        default: false,
+        description: 'Add every undefined key to a locale file, with an empty string as its value, in the project default locale only. Existing values are never touched, and uncertain findings are never written. The layer is the one the using code resolves against; when that is more than one layer, the run refuses and asks for a layer name. Default: false, which only reports.',
+      },
+      layer: {
+        type: 'string',
+        description: 'Layer to write the undefined keys into (e.g., "root", "app-admin"). Only read together with write, and only needed when the using code resolves against more than one layer. Call discover to list the layers.',
       },
       scanDirs,
       excludeDirs,
@@ -629,11 +680,16 @@ export const descriptors: readonly AnyOperationDescriptor[] = [
      *
      * Reads summary.undefinedCount, which the result carries whether or not it
      * was diverted to a file. Uncertain findings never trip it.
+     *
+     * A `write` run counts what it wrote out of that number: a key with a
+     * definition, even an empty one, no longer renders raw, so extracting every
+     * finding exits 0 and anything left over — a key the layer already defined,
+     * skipped by the add-only write — still exits 2.
      */
     gates: [{ name: 'undefined-keys', counter: 'undefinedCount', threshold: 0 }],
     report: {
       name: 'find_undefined_keys',
-      outputFile: { example: '/tmp/undefined-keys.json' },
+      outputFile: { example: '.i18n-reports/undefined-keys.json' },
       summary: (result: CheckUndefinedKeysResult) => result.summary,
       codequality: {
         findings: 'findings',
@@ -645,6 +701,8 @@ export const descriptors: readonly AnyOperationDescriptor[] = [
       const { checkUndefinedKeys } = await core()
       return checkUndefinedKeys({
         locale: args.locale,
+        write: args.write,
+        layer: args.layer,
         scanDirs: args.scanDirs,
         excludeDirs: args.excludeDirs,
         projectDir: args.projectDir,
@@ -703,7 +761,7 @@ export const descriptors: readonly AnyOperationDescriptor[] = [
       name: args => (args.usages === true
         ? 'scan_code_usage'
         : args.remove === true ? 'remove_orphan_keys' : 'find_orphan_keys'),
-      outputFile: { example: '/tmp/orphan-keys.json' },
+      outputFile: { example: '.i18n-reports/orphan-keys.json' },
       summary: (result: OrphanCommandResult) => result.summary,
       codequality: {
         findings: 'orphan findings',
@@ -789,8 +847,16 @@ export const descriptors: readonly AnyOperationDescriptor[] = [
     },
     report: {
       name: 'find_duplicate_keys',
-      outputFile: { example: '/tmp/duplicate-keys.json' },
+      outputFile: { example: '.i18n-reports/duplicate-keys.json' },
       summary: (result: FindDuplicateKeysResult) => result.summary,
+      codequality: {
+        findings: 'duplicate keys',
+        issues: (result: FindDuplicateKeysResult, ctx) => duplicateKeysToCodeQuality(result, {
+          config: ctx.config,
+          projectDir: ctx.projectDir,
+          locale: ctx.args.locale,
+        }),
+      },
     },
     async run(args) {
       const { findDuplicateKeys } = await core()

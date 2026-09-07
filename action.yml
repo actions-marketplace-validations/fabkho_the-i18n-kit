@@ -47,7 +47,7 @@ inputs:
   cli_version:
     description: '@the-i18n-kit/cli version to install (npm dist-tag or version). Use "skip" if the CLI is already installed (e.g. a local build).'
     required: false
-    default: 'latest'
+    default: '8' # x-release-please-major
 
 outputs:
   translated_count:
@@ -95,8 +95,8 @@ runs:
         set -euo pipefail
 
         args=(--provider "$PROVIDER" --model "$MODEL" --layer "$LAYER" --batch-size "$BATCH_SIZE" --json)
-        [ -z "$LOCALES" ] || args+=(--targets "$LOCALES")
-        [ -z "$SOURCE_LOCALE" ] || args+=(--ref "$SOURCE_LOCALE")
+        [ -z "$LOCALES" ] || args+=(--targetLocales "$LOCALES")
+        [ -z "$SOURCE_LOCALE" ] || args+=(--referenceLocale "$SOURCE_LOCALE")
         [ -z "$KEYS" ] || args+=(--keys "$KEYS")
         [ "$DRY_RUN" != "true" ] || args+=(--dry-run)
         [ "$FAIL_ON_FAILED" != "true" ] || args+=(--fail-on-failed)

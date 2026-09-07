@@ -242,12 +242,19 @@ export interface TranslationStatusResult {
   locales: LocaleStatus[]
   layers: LayerStatus[]
   /**
-   * Locale → layer → the keys whose value is an empty string. Present only when
-   * the caller asked to list them; `summary.emptyKeys` counts them either way.
-   * Added to the result rather than replacing it, so asking which keys are
-   * empty still answers the coverage question that prompted it.
+   * Locale → layer → the keys `summary.emptyKeys` counts: empty in that target
+   * locale while the reference locale has a value. Present only when the caller
+   * asked to list them. Added to the result rather than replacing it, so asking
+   * which keys are empty still answers the coverage question that prompted it.
    */
   empty?: Record<string, Record<string, string[]>>
+  /**
+   * Layer → keys whose value is empty in the reference locale itself. Nothing
+   * to translate from, so excluded from every count; listed so a deliberate
+   * blank and a forgotten one can be told apart. Present only with `empty`,
+   * and only when there are any.
+   */
+  emptyInReference?: Record<string, string[]>
   summary: TranslationStatusSummary
 }
 
@@ -264,6 +271,10 @@ export interface EmptyTranslationsResult {
 
 // ─── search_translations ─────────────────────────────────────────
 
+/**
+ * One key in one locale of one layer — the detail rows, returned when the
+ * caller asks for them.
+ */
 export interface SearchMatch {
   layer: string
   locale: string
@@ -271,8 +282,42 @@ export interface SearchMatch {
   value: unknown
 }
 
+/**
+ * One key, however many layers and locales define it — the row a search
+ * returns by default.
+ *
+ * A key that exists in seven layers and thirty locales used to come back as
+ * dozens of near-identical rows, which an agent pays for and then has to group
+ * itself before it can answer the question it asked: does a translation for
+ * this text already exist, and where. Grouped here instead, because `layers`
+ * is the answer to the second half — one layer means reuse it, several mean
+ * the key is already duplicated.
+ */
+export interface SearchKeyMatch {
+  key: string
+  /** Every searched layer that defines the key, in layer order. */
+  layers: string[]
+  /** What `locale` holds for the key. */
+  value: unknown
+  /**
+   * Which locale `value` was read from: the reference locale where it defines
+   * the key, otherwise the first searched locale that does.
+   */
+  locale: string
+  /** How many of the searched locales define the key. */
+  localeCount: number
+}
+
+/** How `query` is compared against a key path or a value. */
+export type SearchMatchMode = 'contains' | 'exact' | 'fuzzy'
+
 export interface SearchTranslationsResult {
-  matches: SearchMatch[]
+  /**
+   * One row per key by default; one row per key and locale when the caller
+   * passed `includeLocales`.
+   */
+  matches: SearchKeyMatch[] | SearchMatch[]
+  /** How many rows `matches` holds, whichever shape it is in. */
   totalMatches: number
 }
 
@@ -585,6 +630,21 @@ export interface UnresolvedKeyWarningRef {
   suggestedIgnorePattern?: string
 }
 
+/**
+ * One `declaredNamespaces` entry with the keys it answers for.
+ *
+ * `matchedKeys` is what makes a declaration auditable in both directions: the
+ * keys a reader would otherwise see in the orphan list, and — when it is empty
+ * — a declaration whose namespace no longer exists.
+ */
+export interface DeclaredNamespaceRef {
+  pattern: string
+  /** What keeps these keys alive, as declared in the config. */
+  reason: string
+  /** Keys of the checked layers this pattern covers. Empty means the declaration is stale. */
+  matchedKeys: string[]
+}
+
 export interface FindOrphanKeysResult {
   orphanKeys: Record<string, string[]>
   uncertainKeys?: Record<string, string[]>
@@ -599,6 +659,9 @@ export interface FindOrphanKeysResult {
   /** Keys used only from apps that do not consume the owning layer. */
   misplacedUsages?: MisplacedUsageRef[]
   misplacedUsageNote?: string
+  /** Every declared namespace with the keys it covers. Present when any is declared. */
+  declaredNamespaces?: DeclaredNamespaceRef[]
+  declaredNamespaceNote?: string
   summary: {
     totalKeys: number
     orphanCount: number
@@ -607,6 +670,8 @@ export interface FindOrphanKeysResult {
     misplacedCount?: number
     dynamicMatchedCount?: number
     ignoredCount?: number
+    /** Keys withheld from the orphan list by a declared namespace. */
+    declaredCount?: number
     usedCount?: number
     filesScanned: number
     /** Files a syntax frontend declined; pattern matching read them instead. */
@@ -670,6 +735,9 @@ export interface RemoveOrphanKeysResult {
   uncertainKeys?: Record<string, string[]>
   misplacedUsages?: MisplacedUsageRef[]
   misplacedUsageNote?: string
+  /** Every declared namespace with the keys it covers — the keys this run will not delete. */
+  declaredNamespaces?: DeclaredNamespaceRef[]
+  declaredNamespaceNote?: string
   summary: {
     dryRun?: boolean
     totalKeys: number
@@ -679,6 +747,8 @@ export interface RemoveOrphanKeysResult {
     misplacedCount?: number
     dynamicMatchedCount?: number
     ignoredCount?: number
+    /** Keys withheld from the orphan list by a declared namespace. */
+    declaredCount?: number
     usedCount?: number
     remainingCount?: number
     filesScanned?: number

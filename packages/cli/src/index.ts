@@ -43,7 +43,7 @@ export { descriptors, descriptorsFor, visibleParams } from './surface/descriptor
 // The file-diversion a surface applies to a large result. Operations return
 // their whole result; a caller that wants the { reportFile, summary } shape
 // asks for it the way the CLI and the server do.
-export { divertToReport } from './surface/report.js'
+export { assertReportPaths, divertToReport } from './surface/report.js'
 export type {
   AnyOperationDescriptor,
   AnyReportSpec,
@@ -66,15 +66,17 @@ export { detectI18nConfig, getCachedConfig, clearConfigCache } from './config/de
 export type { I18nConfig, LocaleDefinition, LocaleDir, ProjectConfig } from './config/types.js'
 export { buildLayerGraph, serializeLayerGraph } from './config/layer-graph.js'
 export type { LayerGraph, SerializedLayerGraph } from './config/layer-graph.js'
-// Exported for the scanner differential harness (#332).
+// Scanning with an explicit frontend list. `scanSourceFiles` picks the right
+// frontends for the pattern set on its own; naming them is for a caller that
+// needs one language's chain and nothing else — the packed-CLI smoke test in
+// `packages/cli/scripts/php-peer-smoke.sh` drives the PHP chain this way, to
+// prove a missing optional parser declines visibly instead of scanning less.
 export { scanSourceFiles } from './scanner/code-scanner.js'
 export type { ScanResult } from './scanner/code-scanner.js'
-export { createOxcFrontend } from './scanner/frontends/oxc.js'
 export { createPatternsFrontend } from './scanner/frontends/patterns.js'
 export { createPhpFrontend } from './scanner/frontends/php/index.js'
-export { createBladeFrontend } from './scanner/frontends/php/blade.js'
-export { getPatternSet, VUE_NUXT_PATTERNS, LARAVEL_PATTERNS } from './scanner/patterns.js'
-export type { LanguageFrontend, CallSite, CallArgument, FileEvidence } from './scanner/frontends/types.js'
+export { LARAVEL_PATTERNS } from './scanner/patterns.js'
+export type { LanguageFrontend } from './scanner/frontends/types.js'
 
 // IO
 export { readLocaleData } from './io/locale-data.js'
