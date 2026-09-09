@@ -82,9 +82,11 @@ export const projectConfigSchema = z.object({
     .optional(),
   localeNotes: z.record(z.string(), z.string())
     .describe(
-      'Per-locale context included in translation prompts. Keys are locale codes (e.g., '
-      + '\'de-DE\', \'en-US\', \'de-DE-formal\'), values describe register, regional '
-      + 'conventions, or other locale-specific guidance.',
+      'Per-locale context included in translation prompts. Each key is matched against a '
+      + 'locale\'s code, language tag, or file name (with or without extension) — whichever '
+      + 'the project uses, e.g. \'de\', \'de-DE\' or \'de-DE.json\'. Values describe register, '
+      + 'regional conventions, or other locale-specific guidance. A key that matches no '
+      + 'locale is reported and ignored.',
     )
     .optional(),
   examples: z.array(
@@ -203,7 +205,9 @@ export const projectConfigSchema = z.object({
       'Write a translation memory to \'.i18n-kit.lock.json\' at the project root, recording per '
       + 'layer, key and target locale a hash of the source text each translation was made from, so '
       + 'later runs can tell targets that are still current from ones whose source has changed since. '
-      + 'Off by default; no file is created until you enable it.',
+      + 'On by default: the first translate run writes the file, which belongs in version control '
+      + 'like any other lockfile. Set to false to disable it — nothing is then read or written, and '
+      + 'an existing file is left untouched.',
     )
     .optional(),
   providerBaseUrl: nonEmptyString

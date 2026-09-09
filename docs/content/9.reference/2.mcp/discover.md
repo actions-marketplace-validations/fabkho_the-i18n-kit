@@ -13,6 +13,7 @@ Describe the project: detected config, locale directories per layer with file co
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
+| `includeTranslationGuidance` | `boolean` | no | Keep the translation prose in projectConfig — glossary, translationPrompt, localeNotes, examples and context. Default: true at a terminal, false for a tool call, which omits those five fields and sets projectConfig.translationGuidanceOmitted instead. Every structural field (layerRules, protectedLocales, declaredNamespaces, orphanScan, translationMemory) is returned either way. |
 | `projectDir` | `string` | no | Absolute path to the project root. Defaults to I18N_PROJECT_DIR, then server cwd. Example: "/home/user/my-app". |
 
 ## Result
@@ -26,7 +27,7 @@ Describe the project: detected config, locale directories per layer with file co
 | `locales` | `object[]` | Every locale of the project. |
 | `localeDirs` | `object[]` | Every locale directory, one per layer, alias layers included. |
 | `layerRootDirs` | `string[]` | Absolute root directories of every layer, which is what source scanning walks. |
-| `projectConfig` | `object` | The declared config from i18n-kit.config.ts or .i18n-mcp.json, as written. Absent when the project has none. |
+| `projectConfig` | `object` | The declared config from i18n-kit.config.ts or .i18n-mcp.json, as written — or without its translation prose, flagged. Absent when the project has none. |
 | `localeFileFormat` | `"json" \| "php-array" \| "yaml"` | Format of the locale files. Absent means the default, "json". |
 | `apps` | `object[]` | Apps and the layers each consumes — the consumer graph orphan scoping reads. |
 | `protectedLocales` | `string[]` | Canonical codes of the locales the translate operations leave alone. Empty when none are protected. |
@@ -35,6 +36,15 @@ Describe the project: detected config, locale directories per layer with file co
 | `translationMode` | `"provider" \| "agent"` | Added by the server: whether it has an LLM provider configured ("provider") or hands back contexts to translate inline ("agent"). Check this before calling a translating tool. |
 | `translationProvider` | `string` | Added by the server: the configured provider name. Absent in agent mode. |
 | `translationModel` | `string` | Added by the server: the configured model name. Absent in agent mode. |
+
+## Behavior Hints
+
+A host reads these to decide whether a call needs your confirmation first.
+
+| Hint | Value |
+| --- | --- |
+| `readOnlyHint` | `true` |
+| `openWorldHint` | `false` |
 
 ## Paired CLI Command
 

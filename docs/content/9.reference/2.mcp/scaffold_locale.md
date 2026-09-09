@@ -26,6 +26,17 @@ Create empty locale files for new languages, copying the key structure of the de
 | `skipped` | `object[]` | Files that already existed and were left alone. |
 | `dryRun` | `boolean` | True when nothing was written because a preview was asked for. |
 
+## Behavior Hints
+
+A host reads these to decide whether a call needs your confirmation first.
+
+| Hint | Value |
+| --- | --- |
+| `readOnlyHint` | `false` |
+| `destructiveHint` | `false` |
+| `idempotentHint` | `true` |
+| `openWorldHint` | `false` |
+
 ## Paired CLI Command
 
 The same operation runs from a terminal as [`the-i18n-cli scaffold`](/reference/cli/scaffold), whose page documents its flags.

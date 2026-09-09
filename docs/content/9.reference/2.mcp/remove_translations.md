@@ -29,6 +29,18 @@ Remove one or more translation keys from ALL locale files in the given layer. Us
 | `notFound` | `string[]` | Requested keys no locale file of the layer defined. Absent when every key existed. |
 | `filesWritten` | `integer` | Number of locale files changed on disk. Absent on a dry run. |
 | `summary` | `object` | Counts of what the run did. Absent on a dry run. |
+| `message` | `string` | The step to take next, as the surface the call ran on phrases it. Present only when there is no summary to carry it. |
+
+## Behavior Hints
+
+A host reads these to decide whether a call needs your confirmation first.
+
+| Hint | Value |
+| --- | --- |
+| `readOnlyHint` | `false` |
+| `destructiveHint` | `true` |
+| `idempotentHint` | `true` |
+| `openWorldHint` | `false` |
 
 ## Paired CLI Command
 

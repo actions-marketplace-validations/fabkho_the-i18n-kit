@@ -1,6 +1,6 @@
 {
   "name": "@the-i18n-kit/cli",
-  "version": "8.1.0",
+  "version": "8.2.0",
   "description": "Find missing translations, remove dead keys, rename across all locales at once — for Nuxt, Laravel, Vue, React/Next.js, or any project with JSON, YAML or PHP locale files",
   "keywords": [
     "i18n",
@@ -30,12 +30,12 @@
   "main": "./dist/index.js",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
     "./config": {
-      "import": "./dist/define-config.js",
-      "types": "./dist/define-config.d.ts"
+      "types": "./dist/define-config.d.ts",
+      "import": "./dist/define-config.js"
     }
   },
   "files": [
@@ -46,6 +46,9 @@
     "dev": "tsdown --watch",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   },
   "dependencies": {
     "citty": "^0.2.2",

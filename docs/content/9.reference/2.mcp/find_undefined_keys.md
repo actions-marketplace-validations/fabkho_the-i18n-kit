@@ -32,6 +32,17 @@ Find keys referenced in source code but defined in NO locale layer the using app
 | `summary` | `object` | What the scan covered and what it found. This is what comes back when the full result is diverted to a file. |
 | `reportFile` | `string` | Absolute path the full JSON result was written to. Read the file for the findings; the summary below is all that came back. |
 
+## Behavior Hints
+
+A host reads these to decide whether a call needs your confirmation first.
+
+| Hint | Value |
+| --- | --- |
+| `readOnlyHint` | `false` |
+| `destructiveHint` | `false` |
+| `idempotentHint` | `true` |
+| `openWorldHint` | `false` |
+
 ## Paired CLI Command
 
 The same operation runs from a terminal as [`the-i18n-cli check`](/reference/cli/check), whose page documents its flags.

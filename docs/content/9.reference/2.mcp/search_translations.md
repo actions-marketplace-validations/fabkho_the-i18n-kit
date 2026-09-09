@@ -19,6 +19,8 @@ Search translation files by key path or value, one compact row per matching key 
 | `layer` | `string` | no | Layer name to search in (e.g., "root", "app-admin"), or "*" for all layers. If omitted, searches every layer. |
 | `locale` | `string` | no | Locale code to search in (e.g., "en", "de"). If omitted, searches every locale. |
 | `includeLocales` | `boolean` | no | Return one row per key and locale — layer, locale, key, value — instead of one row per key. Several times the output for the same findings, so ask for it when the per-locale values are what you are after. Default: false. |
+| `limit` | `integer` | no | Maximum number of matching rows to return. Default: 100 for a tool call, unlimited at a terminal. When the cap applies the result carries truncated: true and nextOffset — call again with offset set to that value for the next page, or narrow the request instead. |
+| `offset` | `integer` | no | Number of matching rows to skip before returning any. Default: 0. Pass the nextOffset of a truncated result to continue where it stopped. |
 | `outputFile` | `string` | no | Absolute path to write the full JSON output to. Only a compact summary is returned to the caller, which is what you want for a result too large to read in one piece. Example: ".i18n-reports/search-results.json" |
 | `projectDir` | `string` | no | Absolute path to the project root. Defaults to I18N_PROJECT_DIR, then server cwd. Example: "/home/user/my-app". |
 
@@ -27,9 +29,21 @@ Search translation files by key path or value, one compact row per matching key 
 | Field | Type | Description |
 | --- | --- | --- |
 | `matches` | `object[]` | One row per key by default; one row per key and locale when includeLocales was passed. |
-| `totalMatches` | `integer` | Number of rows in matches, whichever shape they are in. |
+| `totalMatches` | `integer` | Number of rows the search found, whichever shape they are in — before limit, so it exceeds the rows in matches when truncated. |
+| `truncated` | `boolean` | True when limit cut the result short. The totals still count everything. |
+| `nextOffset` | `integer` | The offset to pass to continue where this result stopped. Present only when truncated. |
+| `message` | `string` | The step to take next — how to continue a capped read. Present when there is one. |
 | `reportFile` | `string` | Absolute path the full JSON result was written to. Read the file for the findings; the summary below is all that came back. |
 | `summary` | `object` | The counts from the full result, so a caller can act on them without reading the file. |
+
+## Behavior Hints
+
+A host reads these to decide whether a call needs your confirmation first.
+
+| Hint | Value |
+| --- | --- |
+| `readOnlyHint` | `true` |
+| `openWorldHint` | `false` |
 
 ## Paired CLI Command
 

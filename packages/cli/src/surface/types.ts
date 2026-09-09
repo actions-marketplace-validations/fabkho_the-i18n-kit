@@ -21,6 +21,7 @@ import type { z } from 'zod'
 import type { I18nConfig } from '../config/types.js'
 import type { CodeQualityIssue } from '../core/codequality.js'
 import type { ProgressFn, TranslateFn } from '../core/types.js'
+import { applyGuidance } from './guidance.js'
 import { withReportParams } from './report.js'
 
 /** Which surface is invoking an operation. They differ only in the prose they own. */
@@ -209,11 +210,27 @@ export interface McpToolSpec {
   name: string
   /** The display title a host shows. */
   title: string
-  /** Behaviour hints a host reads. Only the translating tools declare any. */
-  annotations?: {
-    title?: string
-    readOnlyHint?: boolean
-  }
+  /**
+   * Behaviour hints a host reads before it decides whether to ask the user.
+   * Every tool declares them: a host treats an absent `destructiveHint` as
+   * true and an absent `openWorldHint` as true, so leaving them out makes a
+   * read tool look like a deletion that reaches the network. `readOnlyHint`
+   * is what lets a host auto-approve the reads; `destructiveHint` is what
+   * makes it confirm a removal but not a scaffold.
+   */
+  annotations: McpToolAnnotations
+}
+
+/** The subset of MCP tool annotations the server advertises. */
+export interface McpToolAnnotations {
+  title?: string
+  readOnlyHint: boolean
+  /** Required for a tool that writes: whether it can destroy data a user has. */
+  destructiveHint?: boolean
+  /** Whether repeating the call with the same arguments changes nothing more. */
+  idempotentHint?: boolean
+  /** Whether the tool reaches beyond the project — the translating tools call a provider. */
+  openWorldHint: boolean
 }
 
 /** How the CLI exposes an operation as a command. */
@@ -358,11 +375,23 @@ export type AnyOperationDescriptor = Omit<OperationDescriptor<Params>, 'run' | '
  *
  * An operation that declares a `report` gains the parameters that request one
  * here, so the two cannot drift apart.
+ *
+ * The run is wrapped so every result carries the next step it implies. Doing it
+ * here rather than in each `run` is what keeps the operation id the guidance is
+ * written against and the id the table declares the same string.
  */
 export function defineOperation<const P extends Params>(
   descriptor: OperationDescriptor<P>,
 ): AnyOperationDescriptor {
   const erased = descriptor as unknown as AnyOperationDescriptor
-  if (erased.report === undefined) return erased
-  return { ...erased, params: withReportParams(erased.params, erased.gates, erased.report) }
+  const guided: AnyOperationDescriptor = {
+    ...erased,
+    async run(args, ctx) {
+      const result = await erased.run(args, ctx)
+      applyGuidance(erased.id, result, ctx.surface)
+      return result
+    },
+  }
+  if (guided.report === undefined) return guided
+  return { ...guided, params: withReportParams(guided.params, guided.gates, guided.report) }
 }

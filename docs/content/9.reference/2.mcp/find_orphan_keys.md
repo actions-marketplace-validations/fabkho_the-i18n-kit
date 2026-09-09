@@ -36,11 +36,23 @@ Report translation keys that no source code references. Nothing is deleted unles
 | `unresolvedKeyWarnings` | `object[]` | Dynamic expressions that could not be resolved to concrete keys, each with an ignore pattern that would cover it. |
 | `candidateOnlyKeys` | `Record<string, string[]>` | Layer → keys kept alive only by the bare-candidate net: a dotted string somewhere shares their name, but nothing a frontend calls a usage references them. Not orphans, but where dead references hide. |
 | `candidateOnlyNote` | `string` | How to read the candidate-only keys. Present alongside them. |
+| `linkedNote` | `string` | Why keys linked with @: from another message's value are not orphans. Present when any is. |
 | `summary` | `object` | What the scan covered and what it found. This is what comes back when the full result is diverted to a file. |
 | `removed` | `Record<string, string[]>` | Layer → keys deleted from every locale file of that layer. |
 | `usages` | `Record<string, object[]>` | Key → its references in source. Only keys with at least one reference appear. |
 | `notFoundInCode` | `string[]` | Requested keys with no reference anywhere in the scanned source. |
 | `reportFile` | `string` | Absolute path the full JSON result was written to. Read the file for the findings; the summary below is all that came back. |
+
+## Behavior Hints
+
+A host reads these to decide whether a call needs your confirmation first.
+
+| Hint | Value |
+| --- | --- |
+| `readOnlyHint` | `false` |
+| `destructiveHint` | `true` |
+| `idempotentHint` | `true` |
+| `openWorldHint` | `false` |
 
 ## Paired CLI Command
 
