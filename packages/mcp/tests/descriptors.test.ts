@@ -141,8 +141,91 @@ describe('the operation table drives the advertised tools', () => {
     }
   })
 
+  it('advertises behaviour hints a host can auto-approve or confirm on', () => {
+    for (const descriptor of mcpDescriptors) {
+      const tool = advertised(descriptor.mcp?.name ?? '')
+      const annotations = tool.annotations ?? {}
+
+      expect(annotations, `${tool.name} declares no annotations`).toEqual(descriptor.mcp?.annotations)
+      expect(typeof annotations.readOnlyHint).toBe('boolean')
+      expect(typeof annotations.openWorldHint).toBe('boolean')
+      // A host reads an absent destructiveHint as true, so a writing tool
+      // says which it is rather than being confirmed for a scaffold.
+      if (annotations.readOnlyHint === false) {
+        expect(typeof annotations.destructiveHint, `${tool.name} writes but declares no destructiveHint`).toBe('boolean')
+      }
+    }
+  })
+
+  it('marks a tool read-only exactly when it has no parameter that writes', () => {
+    const writes = new Set(['write', 'remove', 'overwriteStale'])
+    for (const descriptor of mcpDescriptors) {
+      const readOnly = descriptor.mcp?.annotations.readOnlyHint
+      const hasWritingParam = Object.keys(descriptor.params).some(name => writes.has(name))
+      const isWriteOperation = ['write', 'remove', 'move', 'translate', 'translate-key', 'scaffold'].includes(descriptor.id)
+      expect(readOnly, `${descriptor.id}`).toBe(!hasWritingParam && !isWriteOperation)
+    }
+  })
+
   it('finds tools to check at all, so none of the above passes vacuously', () => {
     expect(tools.length).toBe(mcpDescriptors.length)
     expect(tools.length).toBeGreaterThan(1)
+  })
+})
+
+/**
+ * The bounds on the reads that used to have none.
+ *
+ * A tool call is answered into a context window, so every read that can grow
+ * with the project takes a window — and says, in the schema a host reads, what
+ * to do when it returned one.
+ */
+describe('the unbounded reads are bounded', () => {
+  const PAGED_TOOLS = ['search_translations', 'list_namespaces', 'get_missing_translations', 'get_translations']
+
+  const spec = (id: string, param: string) =>
+    descriptors.find(descriptor => descriptor.id === id)?.params[param]
+
+  it.each(PAGED_TOOLS)('%s advertises limit and offset', (name) => {
+    const properties = advertised(name).inputSchema.properties ?? {}
+
+    expect(Object.keys(properties)).toEqual(expect.arrayContaining(['limit', 'offset']))
+    expect((properties.limit as { description?: string }).description).toContain('truncated')
+    expect((properties.offset as { description?: string }).description).toContain('nextOffset')
+  })
+
+  it.each(PAGED_TOOLS)('%s leaves limit and offset optional', (name) => {
+    expect(advertised(name).inputSchema.required ?? []).not.toContain('limit')
+    expect(advertised(name).inputSchema.required ?? []).not.toContain('offset')
+  })
+
+  it('declares no limit default on the table, because the two surfaces disagree', () => {
+    // `default` is applied by the CLI, which stays unbounded; the 100 a tool
+    // call gets is resolved from the surface at run time. A default here would
+    // cap the terminal too.
+    for (const id of ['search', 'list-namespaces', 'missing', 'get']) {
+      expect(spec(id, 'limit')?.default, id).toBeUndefined()
+      expect(spec(id, 'limit')?.description, id).toContain('100 for a tool call, unlimited at a terminal')
+      expect(spec(id, 'offset')?.default, id).toBeUndefined()
+    }
+  })
+
+  it('offers get_translations a key prefix, and requires neither it nor the layer', () => {
+    const tool = advertised('get_translations')
+
+    expect(tool.inputSchema.properties).toHaveProperty('keyPrefix')
+    expect(tool.inputSchema.required ?? []).toEqual(['locale'])
+    expect(tool.description).toContain('EARG')
+  })
+
+  it('lets discover drop the translation prose, and defaults to dropping it for a tool call', () => {
+    const properties = advertised('discover').inputSchema.properties ?? {}
+
+    expect(properties).toHaveProperty('includeTranslationGuidance')
+    // True on the table is the CLI's default; a tool call sends nothing and the
+    // operation's own default (false) is what a host gets.
+    expect(spec('discover', 'includeTranslationGuidance')?.default).toBe(true)
+    expect((properties.includeTranslationGuidance as { description?: string }).description)
+      .toContain('translationGuidanceOmitted')
   })
 })

@@ -34,6 +34,18 @@ Write translation key-value pairs to a layer. Keys are inserted in alphabetical 
 | `ambiguousLocales` | `object[]` | Locale refs that matched several locales, with the one precedence picked. Absent when every ref was unambiguous. |
 | `summary` | `object` | Counts of what the run did. Absent on a dry run. |
 | `skippedKeys` | `string[]` | The keys behind keysSkipped, when the mode skipped any. Absent when nothing was skipped. |
+| `message` | `string` | The step to take next, as the surface the call ran on phrases it. Present only when there is no summary to carry it. |
+
+## Behavior Hints
+
+A host reads these to decide whether a call needs your confirmation first.
+
+| Hint | Value |
+| --- | --- |
+| `readOnlyHint` | `false` |
+| `destructiveHint` | `true` |
+| `idempotentHint` | `true` |
+| `openWorldHint` | `false` |
 
 ## Paired CLI Command
 

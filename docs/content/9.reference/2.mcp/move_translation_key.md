@@ -36,10 +36,22 @@ Move a translation key to another layer, to another key path, or both, carrying 
 | `notFoundInLocales` | `string[]` | Locales whose source layer does not define the key at all. |
 | `conflictsInLocales` | `string[]` | Locales where the destination holds a different value. Nothing is written at all when this is non-empty. |
 | `summary` | `object` | Counts of what the run did. |
+| `message` | `string` | The step to take next, as the surface the call ran on phrases it. Present only when there is no summary to carry it. |
 | `wouldRename` | `object[]` | The plan, one entry per locale. Present only with dryRun. |
 | `renamed` | `string[]` | Locales whose file was rewritten with the new key. Absent on a dry run. |
 | `oldKey` | `string` | The key path before the rename. |
 | `skippedDueToConflict` | `string[]` | Locales left untouched because of such a conflict. |
+
+## Behavior Hints
+
+A host reads these to decide whether a call needs your confirmation first.
+
+| Hint | Value |
+| --- | --- |
+| `readOnlyHint` | `false` |
+| `destructiveHint` | `true` |
+| `idempotentHint` | `false` |
+| `openWorldHint` | `false` |
 
 ## Paired CLI Command
 

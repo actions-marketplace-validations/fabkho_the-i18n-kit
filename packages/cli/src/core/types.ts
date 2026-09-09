@@ -130,6 +130,8 @@ export interface WriteTranslationsResult {
     message: string
   }
   skippedKeys?: string[]
+  /** The step after this one, as the surface phrases it. Present only when there is no summary to carry it. */
+  message?: string
 }
 
 // ─── init ────────────────────────────────────────────────────────
@@ -187,6 +189,8 @@ export interface MissingTranslationsResult {
     targetLocales: Array<string | LocaleRefInfo>
     layersScanned: string[]
     totalMissingKeys: number
+    /** The step after this one, as the surface the call ran on phrases it. Present when there is one. */
+    message?: string
   }
 }
 
@@ -199,6 +203,12 @@ export interface LocaleStatus extends LocaleRefInfo {
   /** Present but empty-string — scaffolded and never filled. */
   empty: number
   completion: number
+  /**
+   * Translated keys whose source text has changed since. Absent, rather than
+   * zero, without a translation memory to compare against — nothing is known
+   * about staleness there, which is not the same as nothing being stale.
+   */
+  stale?: number
   /** Listed in protectedLocales: maintained by hand. */
   protected?: true
   /** Protected locales are reported but kept out of the overall figure. */
@@ -212,6 +222,8 @@ export interface LayerStatus {
   missing: number
   empty: number
   completion: number
+  /** As on LocaleStatus: absent without a translation memory. */
+  stale?: number
   /**
    * Apps whose declared layers include this one. Empty means either no app
    * information exists (hand-built configs) or nothing consumes the layer.
@@ -234,6 +246,11 @@ export interface TranslationStatusSummary {
   translatedKeys: number
   missingKeys: number
   emptyKeys: number
+  /**
+   * Translated keys across the counted locales whose source text has changed
+   * since. Absent without a translation memory, matching translate's summary.
+   */
+  staleCount?: number
   /** Overall completion, protected locales excluded. Read by --fail-under. */
   completionPercent: number
 }
@@ -317,7 +334,11 @@ export interface SearchTranslationsResult {
    * passed `includeLocales`.
    */
   matches: SearchKeyMatch[] | SearchMatch[]
-  /** How many rows `matches` holds, whichever shape it is in. */
+  /**
+   * How many rows matched, whichever shape they are in. Counted before any
+   * limit applies, so it stays the size of the finding rather than the size of
+   * the window returned.
+   */
   totalMatches: number
 }
 
@@ -342,6 +363,8 @@ export interface RemoveTranslationsResult {
     keysFound: number
     message: string
   }
+  /** The step after this one, as the surface phrases it. Present only when there is no summary to carry it. */
+  message?: string
 }
 
 // ─── rename_translation_key ──────────────────────────────────────
@@ -370,6 +393,8 @@ export interface RenameTranslationKeyResult {
     message: string
     warning?: string
   }
+  /** The step after this one, as the surface phrases it. Present only when there is no summary to carry it. */
+  message?: string
 }
 
 /** What a move does to one locale's copy of the key. */
@@ -412,6 +437,8 @@ export interface MoveTranslationKeyResult {
     message: string
     warning?: string
   }
+  /** The step after this one, as the surface phrases it. Present only when there is no summary to carry it. */
+  message?: string
 }
 
 // ─── translate_missing ───────────────────────────────────────────
@@ -473,6 +500,7 @@ export interface TranslateMissingLocaleResult {
    * `overwriteStale`, which counts them into `missing` instead.
    */
   stale?: string[]
+  /** Provider requests issued for this locale, splits and re-asks of a cut-off batch included. */
   batches?: number
   model?: string
   writeError?: string
@@ -489,6 +517,7 @@ export interface TranslateMissingCompactEntry {
   skipped: number
   wouldTranslate?: number
   stale?: number
+  /** Provider requests issued for this locale, splits and re-asks of a cut-off batch included. */
   batches?: number
   model?: string
   writeError?: string
@@ -656,6 +685,8 @@ export interface FindOrphanKeysResult {
    */
   candidateOnlyKeys?: Record<string, string[]>
   candidateOnlyNote?: string
+  /** Why keys linked with `@:` from another message's value are not orphans. Present when any is. */
+  linkedNote?: string
   /** Keys used only from apps that do not consume the owning layer. */
   misplacedUsages?: MisplacedUsageRef[]
   misplacedUsageNote?: string
@@ -672,6 +703,8 @@ export interface FindOrphanKeysResult {
     ignoredCount?: number
     /** Keys withheld from the orphan list by a declared namespace. */
     declaredCount?: number
+    /** Keys withheld because another message's value links to them with `@:`. */
+    linkedCount?: number
     usedCount?: number
     filesScanned: number
     /** Files a syntax frontend declined; pattern matching read them instead. */
@@ -749,6 +782,8 @@ export interface RemoveOrphanKeysResult {
     ignoredCount?: number
     /** Keys withheld from the orphan list by a declared namespace. */
     declaredCount?: number
+    /** Keys withheld because another message's value links to them with `@:`. */
+    linkedCount?: number
     usedCount?: number
     remainingCount?: number
     filesScanned?: number

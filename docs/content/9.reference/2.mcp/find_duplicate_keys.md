@@ -29,6 +29,15 @@ Find translation keys defined in BOTH a shared layer and an app layer that consu
 | `summary` | `object` | What the scan compared and what it found. This is what comes back when the full result is diverted to a file. |
 | `reportFile` | `string` | Absolute path the full JSON result was written to. Read the file for the findings; the summary below is all that came back. |
 
+## Behavior Hints
+
+A host reads these to decide whether a call needs your confirmation first.
+
+| Hint | Value |
+| --- | --- |
+| `readOnlyHint` | `true` |
+| `openWorldHint` | `false` |
+
 ## Paired CLI Command
 
 The same operation runs from a terminal as [`the-i18n-cli find-duplicates`](/reference/cli/find-duplicates), whose page documents its flags.

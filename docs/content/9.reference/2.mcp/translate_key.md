@@ -50,6 +50,9 @@ A host reads these to decide whether a call needs your confirmation first.
 | Hint | Value |
 | --- | --- |
 | `readOnlyHint` | `false` |
+| `destructiveHint` | `true` |
+| `idempotentHint` | `true` |
+| `openWorldHint` | `true` |
 
 ## Paired CLI Command
 
